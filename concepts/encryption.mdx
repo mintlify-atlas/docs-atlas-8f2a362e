@@ -1,0 +1,391 @@
+---
+title: Encryption
+description: Deep dive into how pyMessenger encrypts your messages and files with end-to-end encryption
+---
+
+Every message and file you send through pyMessenger is protected by end-to-end encryption. This means that only you and your intended recipients can read the content — not the server, not network administrators, not anyone else.
+
+This page explains exactly how the encryption works, with references to the actual implementation.
+
+## Message encryption
+
+### Hybrid encryption scheme
+
+pyMessenger uses a hybrid encryption approach that combines the security of RSA with the speed of AES:
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                     MESSAGE ENCRYPTION                        │
+└──────────────────────────────────────────────────────────────┘
+
+1. GENERATE SYMMETRIC KEY
+   ┌────────────────────┐
+   │ Random AES-256 Key │  ◄── Cryptographically secure
+   └──────────┬─────────┘      random number generator
+              │
+              ▼
+2. ENCRYPT MESSAGE CONTENT
+   ┌──────────────┐
+   │   Plaintext  │
+   └──────┬───────┘
+          │
+          ▼
+   [AES-256-EAX]  ◄── EAX mode provides authentication
+          │           (prevents tampering)
+          ├─────► Ciphertext
+          ├─────► Nonce (96-bit)
+          └─────► Authentication Tag (128-bit)
+
+3. ENCRYPT AES KEY FOR EACH RECIPIENT
+   ┌──────────────────┐
+   │ AES-256 Key      │
+   └────────┬─────────┘
+            │
+            ▼
+     [RSA-2048-OAEP] ◄── Using recipient's public key
+            │            (Separate encryption per recipient)
+            │
+            ├─────► Encrypted Key (Recipient A)
+            ├─────► Encrypted Key (Recipient B)
+            └─────► Encrypted Key (Recipient C)
+
+4. DELIVER MESSAGE ENVELOPE
+   {
+     "ciphertext": <encrypted message>,
+     "nonce": <AES nonce>,
+     "tag": <authentication tag>,
+     "keys": {
+       "recipient_a": <encrypted AES key for A>,
+       "recipient_b": <encrypted AES key for B>
+     }
+   }
+```
+
+### Step 1: Generate random AES key
+
+Every message gets a brand new AES-256 key (`client.py:944`):
+
+```python
+aes_key = get_random_bytes(32)
+```
+
+This uses Python's cryptographically secure random number generator. The key is 32 bytes (256 bits) and is completely random.
+
+<Note>
+A new key for every message means that even if one key is compromised, it doesn't help decrypt any other messages. This is called perfect forward secrecy at the message level.
+</Note>
+
+### Step 2: Encrypt the message
+
+The plaintext message is encrypted using AES-256 in EAX mode (`client.py:945-947`):
+
+```python
+aes_cipher = AES.new(aes_key, AES.MODE_EAX)
+ciphertext, tag = aes_cipher.encrypt_and_digest(plaintext)
+nonce = aes_cipher.nonce
+```
+
+This produces three outputs:
+
+1. **Ciphertext**: The encrypted message (same length as plaintext)
+2. **Tag**: A 128-bit authentication tag
+3. **Nonce**: A 96-bit number used once
+
+<Accordion title="Why EAX mode?">
+EAX (Encrypt-then-Authenticate-then-Translate) is an AEAD cipher mode. AEAD stands for Authenticated Encryption with Associated Data.
+
+This means it provides:
+- **Confidentiality**: The ciphertext doesn't reveal the plaintext
+- **Authenticity**: The tag proves the message hasn't been modified
+- **Non-malleability**: Attackers can't make predictable changes to the ciphertext
+
+Other modes like CBC or CTR only provide confidentiality. Without authentication, an attacker could flip bits in the ciphertext to produce predictable changes in the plaintext.
+</Accordion>
+
+### Step 3: Encrypt key for each recipient
+
+The AES key is encrypted separately for each recipient using their RSA-2048 public key (`client.py:949-956`):
+
+```python
+keys_map = {}
+for target in targets:
+    pub = self.peer_keys.get(target)
+    if not pub:
+        continue
+    rsa_cipher = PKCS1_OAEP.new(pub)
+    enc_key = rsa_cipher.encrypt(aes_key)
+    keys_map[target] = base64.b64encode(enc_key).decode('utf-8')
+```
+
+Each recipient gets a different encrypted copy of the same AES key. Only their private key can decrypt it.
+
+### Step 4: Package and send
+
+All components are packaged into a JSON envelope and sent to the server (`client.py:961-971`):
+
+```python
+envelope = {
+    "type": "encrypted_send",
+    "from": self.username,
+    "targets": list(keys_map.keys()),
+    "ciphertext": base64.b64encode(ciphertext).decode('utf-8'),
+    "nonce": base64.b64encode(nonce).decode('utf-8'),
+    "tag": base64.b64encode(tag).decode('utf-8'),
+    "keys": keys_map
+}
+
+send_json(self.client_socket, envelope)
+```
+
+The server relays this envelope to each target without being able to decrypt anything.
+
+## Message decryption
+
+When you receive an encrypted message, the decryption process reverses the steps:
+
+### Step 1: Extract your encrypted key
+
+The client extracts the encrypted AES key meant for you (`client.py:1229-1230`):
+
+```python
+enc_key_b64 = pkg.get('key')
+enc_key = base64.b64decode(enc_key_b64)
+```
+
+### Step 2: Decrypt the AES key
+
+Your RSA private key decrypts the AES key (`client.py:1236-1238`):
+
+```python
+rsa_cipher = PKCS1_OAEP.new(self.rsa_key)
+aes_key = rsa_cipher.decrypt(enc_key)
+```
+
+Only your private key can do this. The server can't, and neither can anyone else.
+
+### Step 3: Decrypt and verify the message
+
+The AES key decrypts the ciphertext and verifies the authentication tag (`client.py:1241-1242`):
+
+```python
+aes_cipher = AES.new(aes_key, AES.MODE_EAX, nonce=nonce)
+plaintext = aes_cipher.decrypt_and_verify(ciphertext, tag)
+```
+
+If the tag doesn't match (meaning the ciphertext was tampered with), `decrypt_and_verify` raises an exception and the message is rejected.
+
+<Info>
+The authentication tag is verified using constant-time comparison to prevent timing attacks. This happens internally in the PyCryptodome library.
+</Info>
+
+## File encryption
+
+File transfers use the same encryption principles but with additional considerations for large files.
+
+### Chunked encryption
+
+Files are split into 64KB chunks, and each chunk is encrypted separately (`client.py:1012-1056`):
+
+```python
+CHUNK_SIZE = 64 * 1024  # 64 KB chunks
+
+for chunk_num in range(1, total_chunks + 1):
+    start = (chunk_num - 1) * CHUNK_SIZE
+    end = min(start + CHUNK_SIZE, len(file_data))
+    chunk = file_data[start:end]
+    
+    # Encrypt chunk with AES
+    aes_key = get_random_bytes(32)
+    aes_cipher = AES.new(aes_key, AES.MODE_EAX)
+    encrypted_chunk, tag = aes_cipher.encrypt_and_digest(chunk)
+    
+    # Encrypt AES key with recipient's public key
+    pub = self.peer_keys.get(target)
+    rsa_cipher = PKCS1_OAEP.new(pub)
+    encrypted_key = rsa_cipher.encrypt(aes_key)
+```
+
+### Why chunk files?
+
+Chunking provides several benefits:
+
+1. **Memory efficiency**: You don't need to load the entire file into memory
+2. **Streaming**: Encryption and transfer can happen in parallel
+3. **Fault tolerance**: A corruption in one chunk doesn't affect others
+4. **Per-chunk security**: Each chunk gets its own random AES-256 key
+
+<Accordion title="Does chunking weaken security?">
+No. Each chunk is encrypted independently with its own AES-256 key. An attacker would need to break the encryption on every single chunk separately.
+
+In fact, chunking provides additional security through key isolation — compromising one chunk's key doesn't help decrypt other chunks.
+</Accordion>
+
+### File transfer protocol
+
+The file transfer happens in phases:
+
+1. **Offer phase**: Sender offers the file with metadata (filename, size)
+2. **Response phase**: Recipient accepts or rejects
+3. **Transfer phase**: Encrypted chunks are streamed
+4. **Assembly phase**: Recipient reassembles chunks into the complete file
+
+You can review the complete flow in:
+- Sender: `client.py:973-1069`
+- Receiver: `client.py:1090-1180`
+- Server relay: `server.py:657-691`
+
+### Zero server storage
+
+The server never stores file content. It acts purely as a relay (`server.py:677-688`):
+
+```python
+if target_socket:
+    # Forward encrypted chunk
+    self.send_json(target_socket, {
+        'type': 'file_transfer',
+        'from': client_name,
+        'file_id': file_id,
+        'chunk_num': chunk_num,
+        'total_chunks': total_chunks,
+        'encrypted_chunk': encrypted_chunk,
+        'nonce': nonce,
+        'tag': tag,
+        'encrypted_key': encrypted_key
+    })
+```
+
+The server can see:
+- Who is sending a file to whom
+- File size (from number of chunks)
+- Filename (sent in plaintext as metadata)
+
+The server cannot see:
+- File content (encrypted with AES-256)
+- File type (if the filename doesn't reveal it)
+- Chunk content (each chunk individually encrypted)
+
+## Private key protection
+
+Your RSA private key is the crown jewel of your security. It's protected with multiple layers.
+
+### Storage encryption
+
+The private key is stored encrypted on disk using AES-256-GCM (`client.py:109-121`):
+
+```python
+def save_private_key(self, username, private_key, password):
+    salt = get_random_bytes(16)
+    encryption_key = self._derive_key(password, salt)
+    cipher = AES.new(encryption_key, AES.MODE_GCM)
+    ciphertext, tag = cipher.encrypt_and_digest(private_key)
+    
+    key_file = self.keys_dir / f"{username}_private.key"
+    with open(key_file, 'wb') as f:
+        f.write(salt + cipher.nonce + tag + ciphertext)
+```
+
+The encryption key is derived from your password using PBKDF2-SHA256 with 100,000 iterations (`client.py:99-107`).
+
+### File permissions
+
+On Unix systems, the key file is restricted to only your user (`client.py:120-121`):
+
+```python
+if os.name != 'nt':
+    os.chmod(key_file, 0o600)
+```
+
+Permissions `0o600` means:
+- Owner: read + write
+- Group: no access  
+- Others: no access
+
+### Key loading
+
+When you log in, the key is loaded and decrypted in memory (`client.py:123-142`):
+
+```python
+def load_private_key(self, username, password):
+    key_file = self.keys_dir / f"{username}_private.key"
+    with open(key_file, 'rb') as f:
+        data = f.read()
+        salt = data[:16]
+        nonce = data[16:32]
+        tag = data[32:48]
+        ciphertext = data[48:]
+    
+    encryption_key = self._derive_key(password, salt)
+    cipher = AES.new(encryption_key, AES.MODE_GCM, nonce=nonce)
+    private_key = cipher.decrypt_and_verify(ciphertext, tag)
+    return RSA.import_key(private_key)
+```
+
+If you enter the wrong password, the authentication tag verification fails and the function returns `None`.
+
+<Note>
+Your private key never leaves your device. During registration, only the **public** key is sent to the server. The private key is immediately encrypted and stored locally.
+</Note>
+
+## Broadcast vs. private messages
+
+The encryption is identical for both broadcast and private messages. The only difference is the number of recipients.
+
+### Broadcast message
+
+When you send to all users (`client.py:587-593`):
+
+```python
+targets = [n for n in self.peer_keys.keys() if n != self.username]
+self.encrypt_and_send_message(message_bytes, targets)
+```
+
+The AES key is encrypted once for each online user. If there are 10 users online, there are 10 RSA-encrypted copies of the same AES key.
+
+### Private message
+
+When you send to one user (`client.py:576-583`):
+
+```python
+if self.current_room:
+    targets = [self.current_room]
+else:
+    targets = [n for n in self.peer_keys.keys() if n != self.username]
+```
+
+The `targets` list contains only one username, so only one RSA-encrypted key is created.
+
+<Info>
+The server can tell the difference by counting recipients, but it cannot decrypt either type of message.
+</Info>
+
+## Security guarantees
+
+With this encryption scheme, you get:
+
+<Accordion title="End-to-end encryption">
+The server acts as a relay but cannot decrypt messages. Only the sender and intended recipients have the necessary keys.
+</Accordion>
+
+<Accordion title="Forward secrecy">
+Each message uses a unique AES-256 key. Compromising one message doesn't help decrypt others.
+</Accordion>
+
+<Accordion title="Authentication">
+The AEAD tag ensures messages cannot be modified without detection. Recipients can verify messages came from the claimed sender (whose private key created the signature implicitly through the encryption).
+</Accordion>
+
+<Accordion title="Confidentiality">
+AES-256 is considered secure against all known attacks, including quantum computers in the near term. RSA-2048 provides approximately 112 bits of security.
+</Accordion>
+
+## What this doesn't protect against
+
+No encryption system is perfect. pyMessenger's encryption does **not** protect against:
+
+- **Endpoint compromise**: If your device is compromised, the attacker can read messages after you decrypt them
+- **Keyloggers**: Malware that records your password as you type it
+- **Screen capture**: Recording what's displayed on your screen
+- **Metadata analysis**: The server knows who you're talking to and when
+- **Traffic analysis**: Network observers can see message sizes and timing
+
+Encryption protects the **content** of your messages, but not the fact that you're communicating or who you're communicating with.

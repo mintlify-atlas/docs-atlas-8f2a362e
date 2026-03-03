@@ -1,0 +1,193 @@
+---
+title: Threat model
+description: Understanding the security threats pyMessenger protects against and its defense mechanisms
+---
+
+## Overview
+
+pyMessenger implements a defense-in-depth security model with multiple layers of protection. This page outlines the threats the system protects against and the security mechanisms in place.
+
+## Protected threats
+
+The following table shows the threats pyMessenger defends against:
+
+| Threat | Protection mechanism | Implementation |
+|--------|---------------------|----------------|
+| **Passive network eavesdropping** | TLS + End-to-end encryption | All messages encrypted at application layer with AES-256-EAX, plus optional TLS transport encryption |
+| **Message tampering** | Authenticated encryption | AEAD (AES-EAX mode) provides 128-bit authentication tag to detect any modifications |
+| **Server compromise** | End-to-end encryption | Server never sees message plaintext - only encrypted envelopes and public keys |
+| **Brute force attacks** | Rate limiting + PBKDF2 | 5 failed login attempts trigger 15-minute lockout; 100,000 PBKDF2 iterations slow password guessing |
+| **Timing attacks** | Constant-time comparisons | HMAC response verification uses constant-time comparison to prevent timing side-channels |
+| **Replay attacks** | Nonce-based challenges | Each authentication challenge is single-use with 5-minute timeout |
+| **Rainbow table attacks** | Salted password hashing | 256-bit random salt per password prevents precomputed hash attacks |
+| **Username enumeration** | Consistent response times | Failed logins for non-existent users have same response time as invalid passwords |
+
+## Encryption layers
+
+pyMessenger uses a layered encryption approach to protect your messages:
+
+<Steps>
+  <Step title="Application layer encryption">
+    Every message is encrypted end-to-end using AES-256-EAX before leaving your device. The server never has access to message plaintext.
+    
+    - **Algorithm**: AES-256 in EAX mode (authenticated encryption)
+    - **Key exchange**: RSA-2048-OAEP
+    - **Key lifetime**: Single-use per message
+  </Step>
+  
+  <Step title="Transport layer encryption">
+    Optional TLS 1.2+ encryption protects metadata and prevents man-in-the-middle attacks during transit.
+    
+    - **Protocol**: TLS 1.2 or higher
+    - **Cipher suites**: ECDHE+AESGCM, ECDHE+CHACHA20
+    - **Perfect forward secrecy**: Ephemeral key exchange (ECDHE/DHE)
+  </Step>
+</Steps>
+
+<Info>
+Even if TLS is disabled or compromised, your messages remain protected by end-to-end encryption. The server and any network observer can only see encrypted message envelopes.
+</Info>
+
+## Authentication security
+
+You authenticate using a challenge-response protocol that never transmits your password after initial registration.
+
+### Challenge-response flow
+
+1. You send a login request with your username and public key
+2. Server generates a random nonce and sends it with your password salt
+3. Your client derives the password key and creates an HMAC signature: `HMAC-SHA256(password_key, nonce)`
+4. Server verifies the signature using constant-time comparison
+5. If valid, server issues a session token
+
+<Accordion title="Why constant-time comparison matters">
+Constant-time comparison prevents timing attacks where an attacker measures how long it takes the server to reject different responses. By taking the same amount of time regardless of where the mismatch occurs, the server reveals no information that could help an attacker guess the correct response.
+</Accordion>
+
+### Account lockout policy
+
+To prevent brute force attacks, pyMessenger implements automatic account lockout:
+
+- **Maximum attempts**: 5 failed logins within a 5-minute window
+- **Lockout duration**: 15 minutes
+- **Tracking**: Failed attempts are tracked per username and cleaned up after the rate limit window expires
+- **Logging**: All failed login attempts are logged with IP address (when available) to `~/.secure_messenger/logs/security.log`
+
+<Warning>
+If you exceed 5 failed login attempts, your account will be locked for 15 minutes. After this period, the lockout automatically expires and you can try again.
+</Warning>
+
+## Message encryption process
+
+pyMessenger uses hybrid encryption combining RSA and AES:
+
+<Steps>
+  <Step title="Generate symmetric key">
+    For each message, a random AES-256 key is generated using a cryptographically secure random number generator.
+  </Step>
+  
+  <Step title="Encrypt message content">
+    The message is encrypted with AES-256-EAX mode, producing:
+    - Ciphertext (encrypted message)
+    - Nonce (96-bit, unique per message)
+    - Authentication tag (128-bit, prevents tampering)
+  </Step>
+  
+  <Step title="Encrypt AES key for recipients">
+    The AES key is encrypted separately for each recipient using their RSA-2048 public key with OAEP padding. This allows each recipient to decrypt the message independently.
+  </Step>
+  
+  <Step title="Deliver message envelope">
+    The server delivers the encrypted envelope containing the ciphertext, nonce, tag, and recipient-specific encrypted keys. The server cannot decrypt any of this data.
+  </Step>
+</Steps>
+
+<Note>
+Each message uses a unique AES key that is discarded after encryption. Even if one message key is compromised, other messages remain secure.
+</Note>
+
+## Key storage security
+
+Your RSA private key is encrypted before being stored on disk:
+
+### Client-side key protection
+
+1. **Key derivation**: Your password is processed with PBKDF2-SHA256 (100,000 iterations) and a random 128-bit salt to generate an encryption key
+2. **Encryption**: Your RSA private key is encrypted with AES-256-GCM using the derived key
+3. **Storage**: The encrypted key is saved to `~/.secure_messenger_client/keys/{username}_private.key`
+4. **Permissions**: On Unix systems, key files have restrictive permissions (0600) to prevent unauthorized access
+
+### Server-side storage
+
+The server only stores:
+
+- **Hashed passwords**: PBKDF2-SHA256 with 100,000 iterations and 256-bit random salt
+- **Public keys**: RSA-2048 public keys (not sensitive)
+- **Account metadata**: Creation timestamp, last login time
+
+<Warning>
+The server never has access to your private key or password plaintext. If the server is compromised, attackers cannot decrypt your messages or impersonate you without your password.
+</Warning>
+
+## File transfer security
+
+When you send files, they are encrypted end-to-end just like messages:
+
+- **Chunked encryption**: Files are split into 64KB chunks, each encrypted separately
+- **Per-chunk keys**: Each chunk gets a unique AES-256 key
+- **Zero server storage**: Files are never saved on the server - they stream directly from sender to recipient
+- **Perfect forward secrecy**: RSA-wrapped keys for each chunk mean compromising one chunk doesn't expose others
+
+<Info>
+The server acts as a relay only. It cannot decrypt file contents and does not store files after transfer completes.
+</Info>
+
+## Challenge timeout
+
+Authentication challenges expire after 5 minutes to prevent replay attacks:
+
+- **Timeout period**: 300 seconds (5 minutes)
+- **Replay protection**: Each nonce can only be used once
+- **Cleanup**: Expired challenges are automatically removed from server memory
+
+If your challenge expires, you'll need to restart the login process to receive a fresh challenge.
+
+## Security logging
+
+All security-relevant events are logged to help you detect suspicious activity:
+
+**Log location**: `~/.secure_messenger/logs/security.log`
+
+**Logged events**:
+- User account creation
+- Authentication challenges created
+- Successful and failed login attempts (with IP address when available)
+- Account lockouts
+- Challenge verification errors
+- Private key load failures
+
+<Accordion title="Example security log entries">
+```
+2026-03-03 14:32:15 - INFO - User created with client pubkey: alice
+2026-03-03 14:32:45 - INFO - Authentication challenge created for user: alice
+2026-03-03 14:32:47 - INFO - User authenticated successfully: alice (IP: 127.0.0.1)
+2026-03-03 14:35:22 - WARNING - Authentication failed - invalid response: bob (IP: 192.168.1.50)
+2026-03-03 14:35:55 - WARNING - Account locked due to 5 failed attempts: bob (IP: 192.168.1.50)
+```
+</Accordion>
+
+## Unmitigated threats
+
+While pyMessenger provides strong security, you should be aware of threats it does not protect against:
+
+| Threat | Why not protected | Mitigation |
+|--------|------------------|------------|
+| **Endpoint compromise** | If your device is compromised, attackers can steal your private key file and keylog your password | Use full disk encryption, keep your OS updated, use antivirus software |
+| **Weak passwords** | PBKDF2 slows brute force but cannot prevent weak password choices | Choose strong passwords (12+ characters, mixed case, numbers, symbols) |
+| **Malicious server** | A modified server could collect metadata (who talks to whom, when) | Run your own server instance from audited source code |
+| **Certificate verification** | Self-signed certificates in the default configuration are vulnerable to MITM | Use a proper PKI with trusted CA certificates in production |
+| **Denial of service** | No built-in DDoS protection | Deploy behind a reverse proxy with rate limiting (nginx, Cloudflare) |
+
+<Warning>
+pyMessenger uses self-signed certificates by default. In a production environment, you should replace these with certificates from a trusted Certificate Authority to prevent man-in-the-middle attacks on the TLS layer.
+</Warning>

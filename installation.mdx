@@ -1,0 +1,220 @@
+---
+title: Installation
+description: Install pyMessenger and its dependencies to start secure messaging
+---
+
+## Prerequisites
+
+pyMessenger requires Python 3.8 or higher. Verify your Python version:
+
+```bash
+python3 --version
+```
+
+You should see output like `Python 3.8.0` or higher.
+
+## Clone the repository
+
+First, clone the pyMessenger repository:
+
+```bash
+git clone https://github.com/yourusername/pyMessenger.git
+cd pyMessenger
+```
+
+## Install dependencies
+
+pyMessenger requires three external Python packages. Install them using the provided requirements file:
+
+```bash
+pip install -r requirements.txt
+```
+
+### Required packages
+
+The installation includes:
+
+<CardGroup cols={3}>
+  <Card title="pycryptodome" icon="key">
+    Cryptographic operations including RSA, AES, PBKDF2, and hashing functions.
+    
+    Version: `>=3.19.0,<4.0.0`
+  </Card>
+  <Card title="cryptography" icon="certificate">
+    X.509 certificate generation and SSL/TLS support for secure transport.
+    
+    Version: `>=41.0.0,<43.0.0`
+  </Card>
+  <Card title="prompt_toolkit" icon="terminal">
+    Enhanced terminal UI with better input handling and ANSI color support.
+    
+    Version: `>=3.0.43,<4.0.0`
+  </Card>
+</CardGroup>
+
+<Note>
+  All other dependencies (socket, ssl, threading, json, etc.) are part of Python's standard library and require no additional installation.
+</Note>
+
+## Generate SSL certificates
+
+Before starting the server, you need to generate self-signed SSL certificates for secure communication:
+
+```bash
+python3 generate_certificates.py
+```
+
+This creates a certificate directory at `~/.secure_messenger/certs/` with:
+
+- `server.crt` - Server certificate (valid for 365 days)
+- `server.key` - Server private key
+
+### Certificate details
+
+The `generate_certificates.py` script creates certificates with the following specifications:
+
+```python generate_certificates.py
+# Generate private key
+private_key = rsa.generate_private_key(
+    public_exponent=65537,
+    key_size=2048,
+    backend=default_backend()
+)
+
+# Certificate valid for 365 days
+not_valid_before=datetime.utcnow()
+not_valid_after=datetime.utcnow() + timedelta(days=365)
+
+# Subject Alternative Names
+SubjectAlternativeName([
+    x509.DNSName(u"localhost"),
+    x509.DNSName(u"127.0.0.1"),
+    x509.IPAddress(ipaddress.IPv4Address(u"127.0.0.1")),
+])
+```
+
+<Warning>
+  These are self-signed certificates suitable for development and testing. For production use, you should obtain certificates from a trusted Certificate Authority.
+</Warning>
+
+## Verify installation
+
+Verify that all components are installed correctly by checking the file structure:
+
+```bash
+ls -l
+```
+
+You should see:
+
+- `client.py` - Client application
+- `server.py` - Server application
+- `user_store.py` - User database and authentication
+- `generate_certificates.py` - SSL certificate generator
+- `requirements.txt` - Python dependencies
+
+And the certificate directory:
+
+```bash
+ls -l ~/.secure_messenger/certs/
+```
+
+Should show:
+
+- `server.crt` - Server certificate
+- `server.key` - Server private key (permissions: 600)
+
+## Directory structure
+
+After installation, pyMessenger uses the following directories:
+
+### Server directories
+
+```
+~/.secure_messenger/
+├── certs/
+│   ├── server.crt           # Server certificate
+│   └── server.key           # Server private key
+├── logs/
+│   └── security.log         # Security audit log
+├── keys/
+│   └── (public keys only)   # User public keys
+└── users.json              # User database
+```
+
+### Client directories
+
+**Linux/Unix:**
+```
+~/.secure_messenger_client/
+├── keys/
+│   └── {username}_private.key  # Encrypted private key
+└── files/
+    ├── received/               # Files received from others
+    └── sent/                   # Copies of sent files
+```
+
+**Windows:**
+```
+C:\Users\[YOUR_USER]\.secure_messenger_client\
+├── keys/
+│   └── {username}_private.key  # Encrypted private key
+└── files/
+    ├── received/               # Files received from others
+    └── sent/                   # Copies of sent files
+```
+
+<Note>
+  Client directories are automatically created on first run with secure permissions (700 on Unix systems).
+</Note>
+
+## Permission settings
+
+On Unix-like systems (Linux, macOS), pyMessenger automatically sets secure file permissions:
+
+- Configuration directories: `700` (owner read/write/execute only)
+- Private keys: `600` (owner read/write only)
+- Certificates: `644` (owner read/write, others read)
+
+The relevant code from `client.py:94-97`:
+
+```python client.py
+if os.name != 'nt':
+    os.chmod(self.config_dir, 0o700)
+    os.chmod(self.keys_dir, 0o700)
+    os.chmod(self.files_dir, 0o700)
+```
+
+## Troubleshooting
+
+### Certificate generation fails
+
+If certificate generation fails, ensure the `cryptography` package is correctly installed:
+
+```bash
+pip install --upgrade cryptography
+```
+
+### Permission denied errors
+
+On Unix systems, if you encounter permission errors, check directory permissions:
+
+```bash
+ls -la ~/.secure_messenger/
+ls -la ~/.secure_messenger_client/
+```
+
+Directories should have `700` permissions and key files should have `600`.
+
+### Import errors
+
+If you see import errors for `Crypto` modules, ensure `pycryptodome` (not `pycrypto`) is installed:
+
+```bash
+pip uninstall pycrypto
+pip install pycryptodome
+```
+
+## Next steps
+
+Now that you have pyMessenger installed, proceed to the [quickstart guide](/quickstart) to start your first messaging session.

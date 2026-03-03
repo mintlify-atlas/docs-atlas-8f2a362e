@@ -1,0 +1,283 @@
+---
+title: Cryptographic layers
+description: Understand the specific cryptographic algorithms and protocols that protect your messages in pyMessenger
+---
+
+pyMessenger uses modern, battle-tested cryptographic algorithms at every layer. This page explains exactly which algorithms are used, how they work together, and why they were chosen.
+
+## Algorithm overview
+
+The system employs five core cryptographic primitives:
+
+| Component | Algorithm | Key Size | Purpose |
+|-----------|-----------|----------|----------|
+| Asymmetric encryption | RSA-OAEP | 2048-bit | Secure key exchange |
+| Symmetric encryption | AES-EAX | 256-bit | Message and file content |
+| Hash function | SHA-256 | 256-bit | All hashing operations |
+| Key derivation | PBKDF2-SHA256 | 256-bit output | Password-based key derivation |
+| Message authentication | HMAC-SHA256 | 256-bit | Challenge-response auth |
+
+## RSA-2048 with OAEP padding
+
+### What it does
+
+RSA (Rivest-Shamir-Adleman) is an asymmetric encryption algorithm used for secure key exchange. Each user has a keypair:
+
+- **Public key**: Shared with everyone, used to encrypt data
+- **Private key**: Kept secret, used to decrypt data
+
+Data encrypted with your public key can **only** be decrypted with your private key.
+
+### Implementation details
+
+You generate your RSA keypair during registration (`client.py:293`):
+
+```python
+rsa_key = RSA.generate(2048)
+```
+
+When encrypting an AES key for a recipient (`client.py:954-955`):
+
+```python
+rsa_cipher = PKCS1_OAEP.new(pub)
+enc_key = rsa_cipher.encrypt(aes_key)
+```
+
+### Why OAEP padding?
+
+OAEP (Optimal Asymmetric Encryption Padding) prevents several attacks against raw RSA:
+
+- **Chosen ciphertext attacks**: OAEP adds randomness, making the same plaintext encrypt to different ciphertexts
+- **Partial decryption**: OAEP ensures all-or-nothing decryption
+- **Malleability**: Without OAEP, attackers could modify ciphertexts in predictable ways
+
+<Note>
+RSA-2048 provides approximately 112 bits of security, which is considered secure against all known attacks including quantum computers in the near term.
+</Note>
+
+## AES-256 in EAX mode
+
+### What it does
+
+AES (Advanced Encryption Standard) is a symmetric encryption algorithm. The same key is used for both encryption and decryption, making it extremely fast for bulk data.
+
+### Why EAX mode?
+
+EAX is an authenticated encryption mode that provides both confidentiality and authenticity. When you encrypt a message (`client.py:944-946`):
+
+```python
+aes_cipher = AES.new(aes_key, AES.MODE_EAX)
+ciphertext, tag = aes_cipher.encrypt_and_digest(plaintext)
+nonce = aes_cipher.nonce
+```
+
+This produces three outputs:
+
+1. **Ciphertext**: The encrypted message
+2. **Tag**: A 128-bit authentication tag proving the message hasn't been tampered with
+3. **Nonce**: A unique 96-bit number used once per encryption
+
+### Authenticated encryption
+
+The authentication tag is critical. When a recipient decrypts (`client.py:1107-1108`):
+
+```python
+aes_cipher = AES.new(aes_key, AES.MODE_EAX, nonce=nonce)
+chunk = aes_cipher.decrypt_and_verify(encrypted_chunk, tag)
+```
+
+If the ciphertext has been modified in any way, `decrypt_and_verify` raises an exception and rejects the message. This prevents tampering attacks.
+
+<Info>
+EAX mode is an AEAD (Authenticated Encryption with Associated Data) cipher. This means it provides both confidentiality and integrity in a single operation.
+</Info>
+
+## PBKDF2-SHA256
+
+### What it does
+
+PBKDF2 (Password-Based Key Derivation Function 2) transforms your password into a cryptographic key. This is used in two places:
+
+1. **Password storage**: Converting passwords to keys for verification
+2. **Private key encryption**: Deriving encryption keys from passwords to protect private keys
+
+### Implementation
+
+When you create an account, your password is hashed using PBKDF2 (`user_store.py:89-94`):
+
+```python
+def _hash_password(self, password, salt=None):
+    if salt is None:
+        salt = get_random_bytes(32)
+    key = PBKDF2(password.encode('utf-8'), salt, 32, count=100000, hmac_hash_module=SHA256)
+    return salt + key
+```
+
+When protecting your private key locally (`client.py:101-107`):
+
+```python
+def _derive_key(self, password, salt):
+    return PBKDF2(
+        password.encode('utf-8'),
+        salt,
+        32,
+        count=100000,
+        hmac_hash_module=SHA256
+    )
+```
+
+### Why 100,000 iterations?
+
+The `count=100000` parameter means PBKDF2 applies SHA-256 hash function 100,000 times. This:
+
+- **Slows down brute force attacks**: An attacker must spend 100,000 times more computation per password guess
+- **Remains fast for legitimate users**: 100,000 iterations takes about 100ms on modern hardware
+- **Exceeds NIST recommendations**: NIST recommends at least 10,000 iterations for PBKDF2-HMAC-SHA256
+
+<Accordion title="Why use a salt?">
+The salt is a random 256-bit value stored alongside the hash. It ensures that:
+
+- The same password produces different hashes for different users
+- Precomputed rainbow tables are useless
+- An attacker must crack each password individually
+
+The salt doesn't need to be secret; it's stored in plaintext (`user_store.py:172-174`).
+</Accordion>
+
+## HMAC-SHA256
+
+### What it does
+
+HMAC (Hash-based Message Authentication Code) proves you know a secret key without revealing it. This is used in challenge-response authentication.
+
+### Authentication flow
+
+When you log in (`user_store.py:234-236`):
+
+```python
+nonce_bytes = challenge['nonce'].encode('utf-8')
+expected_response = hmac.new(stored_key, nonce_bytes, hashlib.sha256).digest()
+expected_response_b64 = base64.b64encode(expected_response).decode('utf-8')
+```
+
+The client computes the same HMAC (`client.py:479-482`):
+
+```python
+response_hash = hmac.new(password_key, nonce_bytes, hashlib.sha256).digest()
+response_b64 = base64.b64encode(response_hash).decode('utf-8')
+```
+
+### Security properties
+
+- **Password never transmitted**: Only the HMAC is sent, not the password or password-derived key
+- **Replay protection**: Each nonce is random and used only once
+- **Constant-time verification**: Prevents timing attacks (`user_store.py:239`)
+
+## SHA-256
+
+### What it does
+
+SHA-256 is a cryptographic hash function that produces a unique 256-bit fingerprint of any input. It's used as a building block in:
+
+- PBKDF2 key derivation
+- HMAC message authentication  
+- Internal operations in RSA-OAEP
+
+### Security properties
+
+- **One-way**: Given a hash, you cannot reverse it to find the original input
+- **Collision resistant**: It's computationally infeasible to find two inputs with the same hash
+- **Deterministic**: The same input always produces the same hash
+
+<Note>
+SHA-256 is part of the SHA-2 family designed by the NSA and standardized by NIST. Despite its NSA origins, it's widely trusted and has withstood decades of cryptanalysis.
+</Note>
+
+## Key management
+
+### Client-side keys
+
+Your private key is stored encrypted on your device using AES-256-GCM (`client.py:113-118`):
+
+```python
+cipher = AES.new(encryption_key, AES.MODE_GCM)
+ciphertext, tag = cipher.encrypt_and_digest(private_key)
+
+key_file = self.keys_dir / f"{username}_private.key"
+with open(key_file, 'wb') as f:
+    f.write(salt + cipher.nonce + tag + ciphertext)
+```
+
+The file structure is:
+
+```
+┌────────────┬──────────┬──────────┬───────────────┐
+│ Salt (16B) │ Nonce    │ Tag      │ Encrypted Key │
+│            │ (16B)    │ (16B)    │ (variable)    │
+└────────────┴──────────┴──────────┴───────────────┘
+```
+
+### Server-side storage
+
+The server stores (`user_store.py:105-110`):
+
+- **Password hash**: PBKDF2 output (salt + derived key)
+- **Public key**: RSA public key in PEM format
+- **Metadata**: Creation time, last login
+
+The server never receives or stores:
+
+- Your password (only its hash)
+- Your private key (client-only)
+- Message decryption keys (ephemeral AES keys)
+
+## Message envelope format
+
+When you send a message, it's packaged as JSON with base64-encoded binary data:
+
+```json
+{
+  "type": "encrypted_send",
+  "from": "sender_username",
+  "targets": ["recipient1", "recipient2"],
+  "ciphertext": "<base64-encoded>",
+  "nonce": "<base64-encoded>",
+  "tag": "<base64-encoded>",
+  "keys": {
+    "recipient1": "<base64-encoded-encrypted-key>",
+    "recipient2": "<base64-encoded-encrypted-key>"
+  }
+}
+```
+
+Each recipient gets their own copy of the AES key, encrypted with their public RSA key. The server cannot decrypt any of this.
+
+## Perfect forward secrecy
+
+### Message level
+
+Every message uses a brand new AES-256 key (`client.py:944`):
+
+```python
+aes_key = get_random_bytes(32)
+```
+
+This means:
+
+- Compromising one message key doesn't help decrypt other messages
+- There's no long-term symmetric key to steal
+- Each message is cryptographically independent
+
+### Transport level
+
+The TLS configuration enforces ephemeral key exchange (ECDHE/DHE):
+
+```python
+context.set_ciphers('ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20:...')
+```
+
+This ensures that even if the server's long-term private key is compromised, past TLS sessions cannot be decrypted.
+
+<Info>
+Perfect forward secrecy means that compromising today's keys doesn't compromise yesterday's messages.
+</Info>

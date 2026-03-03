@@ -1,0 +1,319 @@
+---
+title: Running the client
+description: Connect to the pyMessenger server and start secure messaging
+---
+
+The pyMessenger client provides a terminal-based interface for secure, end-to-end encrypted messaging. It supports user registration, authentication, and encrypted communication.
+
+## Starting the client
+
+<Steps>
+  <Step title="Ensure server certificate is available">
+    Before connecting, you need the server's SSL certificate for verification. Copy the server certificate to your client machine:
+
+    ```bash
+    mkdir -p ~/.secure_messenger/certs
+    cp /path/to/server.crt ~/.secure_messenger/certs/
+    ```
+
+    <Warning>
+      The client will refuse to connect without a valid server certificate. This prevents man-in-the-middle attacks.
+    </Warning>
+  </Step>
+
+  <Step title="Launch the client">
+    Connect to the server using the client application:
+
+    ```bash
+    python client.py --host localhost --port 1315
+    ```
+
+    You'll see the pyMessenger banner and authentication menu:
+
+    ```
+    ======================================================================
+                            pyMESSENGER V2.1                            
+                      End-to-End Encrypted Messaging                    
+    ======================================================================
+
+      Please select an option:
+
+        1. Create new account
+        2. Login to existing account
+        3. Exit
+
+      Choice [1-3]:
+    ```
+  </Step>
+
+  <Step title="Authenticate">
+    Choose to either register a new account or login to an existing account. See the [authentication guide](#authentication) below for details.
+  </Step>
+</Steps>
+
+## Command-line options
+
+The client accepts the following command-line arguments:
+
+<ParamField path="--host" type="string" default="localhost">
+  Server hostname or IP address to connect to.
+
+  ```bash
+  python client.py --host 192.168.1.100
+  ```
+</ParamField>
+
+<ParamField path="-H" type="string" default="localhost">
+  Short form of `--host`.
+
+  ```bash
+  python client.py -H server.example.com
+  ```
+</ParamField>
+
+<ParamField path="--port" type="int" default="1315">
+  Server port number.
+
+  ```bash
+  python client.py --port 5000
+  ```
+</ParamField>
+
+<ParamField path="-P" type="int" default="1315">
+  Short form of `--port`.
+
+  ```bash
+  python client.py -P 5000
+  ```
+</ParamField>
+
+## Authentication
+
+### Creating a new account
+
+<Steps>
+  <Step title="Select registration option">
+    From the authentication menu, enter `1` to create a new account.
+  </Step>
+
+  <Step title="Enter credentials">
+    Provide a username and password:
+
+    ```
+    ======================================================================
+                            CREATE NEW ACCOUNT                           
+    ======================================================================
+
+      • Password must be at least 6 characters long
+      • Type '!back' at any prompt to return to main menu
+
+      Username: alice
+      Password: 
+      Confirm: 
+    ```
+
+    <Note>
+      Passwords must be at least 6 characters. The password confirmation is required to prevent typos.
+    </Note>
+  </Step>
+
+  <Step title="Key generation">
+    The client automatically generates a 2048-bit RSA keypair:
+
+    ```
+      → Generating encryption keys...
+      ✓ Encryption keys generated and stored locally
+    ```
+
+    Your private key is encrypted with your password and stored in:
+    ```
+    ~/.secure_messenger_client/keys/<username>_private.key
+    ```
+  </Step>
+
+  <Step title="Server registration">
+    The client connects to the server and registers your account:
+
+    ```
+      → Connecting to server...
+      ✓ Secure connection established (TLS/SSL)
+        Cipher: ECDHE-RSA-AES256-GCM-SHA384
+      → Initiating authentication...
+      ✓ Registration successful
+    ```
+  </Step>
+</Steps>
+
+### Logging in
+
+<Steps>
+  <Step title="Select login option">
+    From the authentication menu, enter `2` to login.
+  </Step>
+
+  <Step title="Enter credentials">
+    Provide your username and password:
+
+    ```
+    ======================================================================
+                          LOGIN TO YOUR ACCOUNT                          
+    ======================================================================
+
+      • Type '!back' to return to main menu
+
+      Username: alice
+      Password:
+    ```
+  </Step>
+
+  <Step title="Local key decryption">
+    The client loads your encrypted private key:
+
+    ```
+      → Loading local encryption keys...
+      ✓ Local keys loaded
+    ```
+
+    If the password is incorrect:
+
+    ```
+      ✗ Incorrect password
+
+      Would you like to:
+        1. Try again
+        2. Return to main menu
+
+      Choice [1-2]:
+    ```
+  </Step>
+
+  <Step title="Challenge-response authentication">
+    The client authenticates using challenge-response (no password is sent):
+
+    ```
+      → Connecting to server...
+      ✓ Secure connection established (TLS/SSL)
+        Cipher: ECDHE-RSA-AES256-GCM-SHA384
+      → Initiating authentication...
+      → Solving authentication challenge...
+      ✓ Login successful
+    ```
+  </Step>
+</Steps>
+
+## Connection security
+
+The client implements multiple security measures:
+
+### SSL/TLS encryption
+
+All connections use TLS 1.2 or higher with strong cipher suites. The client displays the active cipher:
+
+```
+✓ Secure connection established (TLS/SSL)
+  Cipher: ECDHE-RSA-AES256-GCM-SHA384
+```
+
+### Certificate validation
+
+The client requires a valid server certificate:
+
+```python
+context.check_hostname = False  # Using IP addresses
+context.verify_mode = ssl.CERT_REQUIRED  # Certificate validation required
+```
+
+<Warning>
+  If the server certificate is not found, the client will refuse to connect:
+
+  ```
+  ✗ Server certificate not found at ~/.secure_messenger/certs/server.crt
+  ! Run generate_certificates.py first or copy server.crt
+  ✗ No SSL certificate available
+  ! Cannot connect without secure encryption
+  ```
+</Warning>
+
+### End-to-end encryption
+
+Messages are encrypted locally before transmission:
+- Each message uses a unique AES-256 key
+- The AES key is encrypted with recipient's RSA public key
+- Server only sees encrypted ciphertext
+
+## Client directories
+
+The client creates several directories for local storage:
+
+```
+~/.secure_messenger_client/
+├── keys/              # Encrypted private keys
+│   └── alice_private.key
+├── files/
+│   ├── received/      # Downloaded files
+│   └── sent/          # Sent file copies
+```
+
+All directories are created with restrictive permissions (mode 0700) on Unix systems.
+
+## Troubleshooting
+
+### Connection refused
+
+```
+✗ Could not connect to server
+```
+
+**Possible causes:**
+- Server is not running
+- Incorrect host or port
+- Firewall blocking connection
+- Network connectivity issue
+
+### SSL handshake failed
+
+```
+✗ SSL connection failed: [SSL: CERTIFICATE_VERIFY_FAILED]
+```
+
+**Solution:** Ensure you have the correct server certificate in `~/.secure_messenger/certs/server.crt`
+
+### Account not found
+
+```
+✗ No account found for username 'alice'
+
+Would you like to:
+  1. Try a different username
+  2. Create a new account
+  3. Return to main menu
+```
+
+**Cause:** No local private key exists for the username. This means you either:
+- Haven't registered this username on this machine
+- Are using a different machine than where you registered
+
+**Solution:** If you registered on another machine, you'll need to transfer your private key file, or create a new account.
+
+### Incorrect password
+
+```
+✗ Incorrect password
+```
+
+**Cause:** The password doesn't match the one used to encrypt your local private key.
+
+**Solution:** Try again with the correct password. If you've forgotten your password, you'll need to create a new account (there is no password recovery).
+
+## Exiting the client
+
+To exit the client at any time:
+
+- From the authentication menu: Enter `3`
+- From the chat interface: Type `/exit` or press `Ctrl+C`
+
+```
+╔═════════════╗
+║ Goodbye! 👋 ║
+╚═════════════╝
+```

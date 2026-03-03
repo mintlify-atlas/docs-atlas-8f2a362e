@@ -1,0 +1,432 @@
+---
+title: SSL/TLS certificates
+description: How to generate, configure, and manage SSL certificates for secure communication
+---
+
+## Overview
+
+pyMessenger uses SSL/TLS certificates to encrypt the transport layer between clients and the server. While messages are already encrypted end-to-end, TLS provides additional protection for metadata and prevents man-in-the-middle attacks.
+
+## Generating certificates
+
+Use the included certificate generation script to create self-signed certificates:
+
+```bash
+python3 generate_certificates.py
+```
+
+This creates two files in `~/.secure_messenger/certs/`:
+
+- `server.crt`: The server certificate (public)
+- `server.key`: The server private key (sensitive)
+
+<Info>
+Certificates are generated automatically with secure defaults. You don't need to provide any configuration options.
+</Info>
+
+### Certificate specifications
+
+The generated certificate has the following properties:
+
+| Property | Value | Purpose |
+|----------|-------|----------|
+| **Key algorithm** | RSA | Industry standard asymmetric encryption |
+| **Key size** | 2048 bits | Secure for TLS (3072+ bits recommended for long-term data) |
+| **Public exponent** | 65537 | Standard RSA exponent for security and performance |
+| **Signature algorithm** | SHA-256 | Cryptographically secure hash function |
+| **Validity period** | 365 days | Automatic expiration forces regular rotation |
+| **Common Name (CN)** | localhost | Server hostname for certificate validation |
+
+### Subject Alternative Names (SAN)
+
+The certificate includes multiple SANs to support different connection methods:
+
+- `DNS:localhost` - For connections to localhost
+- `DNS:127.0.0.1` - For direct IP connections (DNS format)
+- `IP:127.0.0.1` - For direct IP connections (IP address format)
+
+<Accordion title="Why are SANs important?">
+Subject Alternative Names allow the certificate to be valid for multiple hostnames and IP addresses. Modern TLS clients require either the CN or a SAN to match the hostname you're connecting to. Without proper SANs, clients may reject the certificate even if it's otherwise valid.
+</Accordion>
+
+## Certificate location
+
+Certificates are stored in the `.secure_messenger` directory:
+
+**Linux/macOS**:
+```
+~/.secure_messenger/certs/
+├── server.crt  (certificate)
+└── server.key  (private key)
+```
+
+**Windows**:
+```
+C:\Users\[YOUR_USER]\.secure_messenger\certs\
+├── server.crt  (certificate)
+└── server.key  (private key)
+```
+
+### Directory permissions
+
+On Unix systems, the certificate directory has restricted permissions:
+
+```bash
+drwx------ (0700)  ~/.secure_messenger/
+drwx------ (0700)  ~/.secure_messenger/certs/
+-rw------- (0600)  ~/.secure_messenger/certs/server.key
+-rw-r--r-- (0644)  ~/.secure_messenger/certs/server.crt
+```
+
+<Warning>
+The `server.key` file contains your private key and must be kept secure. Only the server process owner should have read access.
+</Warning>
+
+## Using certificates
+
+### Server configuration
+
+The server automatically loads certificates from the default location when started:
+
+```bash
+python3 server.py
+```
+
+If certificates are missing, the server will display an error and may fall back to unencrypted communication (depending on configuration).
+
+### Client connection
+
+Clients connect using the server's certificate for TLS encryption:
+
+```bash
+python3 client.py --host localhost --port 1315
+```
+
+<Note>
+For self-signed certificates, clients may need to accept the certificate on first connection or use an `--insecure` flag to skip verification (not recommended for production).
+</Note>
+
+## Self-signed vs CA-signed certificates
+
+### Self-signed certificates (default)
+
+**Advantages**:
+- Free to generate
+- No external dependencies
+- Immediate availability
+- Full control over certificate properties
+
+**Disadvantages**:
+- Not trusted by clients automatically
+- Vulnerable to man-in-the-middle attacks without manual verification
+- Require certificate pinning or manual acceptance
+- Not suitable for production use with untrusted clients
+
+<Warning>
+Self-signed certificates provide encryption but not authentication. An attacker performing a MITM attack can substitute their own self-signed certificate, and clients won't detect the substitution automatically.
+</Warning>
+
+### CA-signed certificates (production)
+
+For production deployments, use certificates from a trusted Certificate Authority:
+
+**Free options**:
+- **Let's Encrypt**: Free, automated certificate issuance with 90-day validity
+- **ZeroSSL**: Free certificates with longer validity periods
+
+**Commercial options**:
+- **DigiCert**: Extended validation certificates
+- **Sectigo**: Domain and organization validation
+- **GlobalSign**: Enterprise certificate solutions
+
+<Steps>
+  <Step title="Obtain a CA-signed certificate">
+    Use a tool like Certbot for Let's Encrypt:
+    
+    ```bash
+    # Install certbot
+    sudo apt-get install certbot  # Ubuntu/Debian
+    
+    # Generate certificate for your domain
+    sudo certbot certonly --standalone -d yourdomain.com
+    ```
+  </Step>
+  
+  <Step title="Copy certificate files">
+    Replace the self-signed certificates with CA-signed ones:
+    
+    ```bash
+    cp /etc/letsencrypt/live/yourdomain.com/fullchain.pem \
+       ~/.secure_messenger/certs/server.crt
+    
+    cp /etc/letsencrypt/live/yourdomain.com/privkey.pem \
+       ~/.secure_messenger/certs/server.key
+    ```
+  </Step>
+  
+  <Step title="Set correct permissions">
+    Ensure the private key is protected:
+    
+    ```bash
+    chmod 600 ~/.secure_messenger/certs/server.key
+    chmod 644 ~/.secure_messenger/certs/server.crt
+    ```
+  </Step>
+  
+  <Step title="Restart the server">
+    Restart pyMessenger to load the new certificates:
+    
+    ```bash
+    # Stop existing server (Ctrl+C)
+    python3 server.py
+    ```
+  </Step>
+</Steps>
+
+## Certificate renewal
+
+### Self-signed certificates
+
+Self-signed certificates expire after 365 days. Renew them before expiration:
+
+```bash
+# Backup old certificates
+mv ~/.secure_messenger/certs/server.crt ~/.secure_messenger/certs/server.crt.old
+mv ~/.secure_messenger/certs/server.key ~/.secure_messenger/certs/server.key.old
+
+# Generate new certificates
+python3 generate_certificates.py
+
+# Restart server
+python3 server.py
+```
+
+<Warning>
+Clients that pinned the old certificate fingerprint will need to accept the new certificate after renewal.
+</Warning>
+
+### CA-signed certificates
+
+CA-signed certificates typically expire after 90 days (Let's Encrypt) or 1 year (commercial CAs).
+
+**Automated renewal with Let's Encrypt**:
+
+```bash
+# Set up automatic renewal (runs twice daily)
+sudo certbot renew --quiet
+
+# Post-renewal hook to copy certificates
+sudo certbot renew --deploy-hook "cp /etc/letsencrypt/live/yourdomain.com/fullchain.pem ~/.secure_messenger/certs/server.crt && cp /etc/letsencrypt/live/yourdomain.com/privkey.pem ~/.secure_messenger/certs/server.key && systemctl restart pymessenger"
+```
+
+<Info>
+Let's Encrypt certificates expire after 90 days. Set up automated renewal to prevent service interruption.
+</Info>
+
+## Certificate verification
+
+### View certificate details
+
+Inspect your certificate to verify it's correct:
+
+```bash
+# View certificate information
+openssl x509 -in ~/.secure_messenger/certs/server.crt -text -noout
+
+# Check expiration date
+openssl x509 -in ~/.secure_messenger/certs/server.crt -noout -enddate
+
+# Get certificate fingerprint
+openssl x509 -in ~/.secure_messenger/certs/server.crt -noout -fingerprint -sha256
+```
+
+### Verify key and certificate match
+
+Ensure your private key matches your certificate:
+
+```bash
+# Get certificate public key hash
+openssl x509 -in ~/.secure_messenger/certs/server.crt -noout -modulus | openssl md5
+
+# Get private key hash
+openssl rsa -in ~/.secure_messenger/certs/server.key -noout -modulus | openssl md5
+
+# These should match
+```
+
+If the hashes don't match, your certificate and private key are not a pair.
+
+### Test TLS connection
+
+Verify the server is using the certificate correctly:
+
+```bash
+# Test TLS connection
+openssl s_client -connect localhost:1315 -showcerts
+
+# Check cipher suites
+openssl s_client -connect localhost:1315 -cipher 'ECDHE-RSA-AES256-GCM-SHA384'
+```
+
+<Accordion title="Understanding the output">
+The `s_client` command shows:
+- Certificate chain (all certificates in the trust path)
+- Cipher suite negotiated
+- TLS protocol version
+- Certificate verification result
+
+Look for "Verify return code: 0 (ok)" for CA-signed certificates, or "Verify return code: 18 (self signed certificate)" for self-signed certificates.
+</Accordion>
+
+## Certificate pinning
+
+For self-signed certificates, implement certificate pinning to prevent MITM attacks:
+
+### Get certificate fingerprint
+
+```bash
+openssl x509 -in ~/.secure_messenger/certs/server.crt -noout -fingerprint -sha256
+```
+
+Example output:
+```
+SHA256 Fingerprint=AB:CD:EF:12:34:56:78:90:AB:CD:EF:12:34:56:78:90:AB:CD:EF:12:34:56:78:90:AB:CD:EF:12:34:56:78:90
+```
+
+### Distribute fingerprint securely
+
+Share the certificate fingerprint with clients through a trusted channel:
+
+- In-person verification
+- Secure messaging (Signal, WhatsApp)
+- Cryptographically signed message
+- Out-of-band communication (phone call)
+
+<Warning>
+Never distribute certificate fingerprints over the same channel you're trying to secure. An attacker intercepting your connection can also intercept the fingerprint.
+</Warning>
+
+### Client verification
+
+Clients should verify the fingerprint on first connection:
+
+```bash
+# Get server's certificate fingerprint
+openssl s_client -connect server:1315 < /dev/null 2>/dev/null | \
+  openssl x509 -fingerprint -sha256 -noout
+```
+
+Compare this with the fingerprint provided by your server administrator.
+
+## Cipher suite configuration
+
+The default TLS configuration supports modern, secure cipher suites:
+
+**Preferred cipher suites**:
+- `ECDHE-RSA-AES256-GCM-SHA384`
+- `ECDHE-RSA-AES128-GCM-SHA256`
+- `ECDHE-RSA-CHACHA20-POLY1305`
+
+**Features**:
+- **Perfect Forward Secrecy (PFS)**: Uses ephemeral keys (ECDHE)
+- **Authenticated Encryption**: GCM and CHACHA20-POLY1305 provide AEAD
+- **Strong Encryption**: AES-256 and ChaCha20 for confidentiality
+
+<Info>
+Perfect forward secrecy means that even if your server's private key is compromised in the future, past communications cannot be decrypted. Each session uses ephemeral keys that are discarded after use.
+</Info>
+
+## Common issues
+
+### Certificate not found
+
+**Error**: `FileNotFoundError: [Errno 2] No such file or directory: '/home/user/.secure_messenger/certs/server.crt'`
+
+**Solution**: Generate certificates before starting the server:
+
+```bash
+python3 generate_certificates.py
+```
+
+### Permission denied
+
+**Error**: `PermissionError: [Errno 13] Permission denied: '/home/user/.secure_messenger/certs/server.key'`
+
+**Solution**: Fix file permissions:
+
+```bash
+chmod 600 ~/.secure_messenger/certs/server.key
+```
+
+### Certificate expired
+
+**Error**: `Certificate has expired`
+
+**Solution**: Regenerate certificates:
+
+```bash
+python3 generate_certificates.py
+python3 server.py  # Restart server
+```
+
+### Certificate hostname mismatch
+
+**Error**: `Hostname mismatch, certificate is not valid for 'example.com'`
+
+**Solution**: Generate a new certificate with the correct hostname in CN or SAN fields, or use a CA-signed certificate for your domain.
+
+### Self-signed certificate warning
+
+**Warning**: Clients display "self-signed certificate" warnings
+
+**Solution**: This is expected for self-signed certificates. You can:
+1. Accept the certificate (not recommended for production)
+2. Implement certificate pinning
+3. Use CA-signed certificates
+
+<Note>
+For development and testing, self-signed certificate warnings are normal. For production, use CA-signed certificates to avoid these warnings.
+</Note>
+
+## Security considerations
+
+### TLS vs end-to-end encryption
+
+Understand the difference between TLS and E2EE:
+
+| Aspect | TLS | End-to-End Encryption |
+|--------|-----|----------------------|
+| **Protects** | Transport layer | Application layer |
+| **Encrypts** | All data in transit | Message content only |
+| **Server access** | Can decrypt | Cannot decrypt |
+| **Metadata** | Protected | Visible to server |
+| **Purpose** | Prevent eavesdropping | Ensure server can't read messages |
+
+<Info>
+Even with TLS disabled or compromised, your messages remain protected by end-to-end encryption. TLS provides additional protection for metadata like sender, recipient, and message size.
+</Info>
+
+### Private key security
+
+Your certificate private key must be protected:
+
+- **Never share** the `server.key` file
+- **Never commit** to version control (add to `.gitignore`)
+- **Restrict permissions** to server process owner only (0600)
+- **Use strong encryption** if storing in backups
+- **Rotate regularly** (generate new certificates annually)
+
+<Warning>
+If your certificate private key is compromised, an attacker can impersonate your server and perform man-in-the-middle attacks on the TLS layer. Immediately revoke the compromised certificate and generate a new one.
+</Warning>
+
+### Certificate revocation
+
+For CA-signed certificates, you can revoke compromised certificates:
+
+```bash
+# Revoke Let's Encrypt certificate
+sudo certbot revoke --cert-path /etc/letsencrypt/live/yourdomain.com/fullchain.pem
+```
+
+For self-signed certificates, there's no revocation mechanism - simply generate new certificates and distribute the new fingerprint to clients.

@@ -1,0 +1,145 @@
+---
+title: Security architecture
+description: Learn how pyMessenger implements defense-in-depth security with multiple layers of encryption and authentication
+---
+
+pyMessenger implements a comprehensive security architecture that protects your messages at every layer, from transport to application. The system uses a defense-in-depth approach, ensuring that even if one layer is compromised, your communications remain secure.
+
+## Multi-layered protection
+
+Your messages are protected by two independent encryption layers:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     APPLICATION LAYER                       │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │         End-to-End Message Encryption (E2EE)          │  │
+│  │                                                       │  │
+│  │  • RSA-2048 for AES key exchange                      │  │
+│  │  • AES-256-EAX for message content                    │  │
+│  │  • Per-message unique keys                            │  │
+│  └───────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                     TRANSPORT LAYER                         │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │            TLS/SSL Encryption (Required)              │  │
+│  │                                                       │  │
+│  │  • TLS 1.2+ with strong cipher suites                 │  │
+│  │  • Protects metadata and prevents MITM                │  │
+│  │  • Certificate-based server verification              │  │
+│  └───────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+<Info>
+The server **cannot read your messages** even if it wanted to. Only the intended recipients have the private keys needed to decrypt message content.
+</Info>
+
+## Application layer (E2EE)
+
+The application layer provides true end-to-end encryption. When you send a message:
+
+1. **Random key generation**: A unique AES-256 key is generated for this message only
+2. **Message encryption**: Your plaintext is encrypted using AES-256 in EAX mode
+3. **Key distribution**: The AES key is encrypted separately for each recipient using their RSA-2048 public key
+4. **Server relay**: The server forwards the encrypted message without ever seeing the content
+
+This architecture is implemented in `client.py:942-971`, where the `encrypt_and_send_message` function creates a new AES key for every message and encrypts it individually for each recipient.
+
+### Why hybrid encryption?
+
+You might wonder why we use both RSA and AES. The answer lies in performance and security:
+
+- **RSA-2048** provides secure key exchange but is too slow for encrypting large amounts of data
+- **AES-256** is extremely fast for bulk encryption but requires both parties to have the same key
+- **Hybrid approach** combines the best of both: RSA securely exchanges a random AES key, then AES encrypts the actual message
+
+## Transport layer (TLS/SSL)
+
+The transport layer protects the connection itself using industry-standard TLS encryption. This layer:
+
+- Encrypts all network traffic between client and server
+- Prevents man-in-the-middle attacks through certificate verification
+- Protects metadata like who is messaging whom and when
+- Provides perfect forward secrecy using ephemeral key exchange
+
+<Note>
+The client requires a valid server certificate to connect. If the certificate cannot be verified, the connection is refused (`client.py:203-206`).
+</Note>
+
+### TLS configuration
+
+You can find the exact TLS configuration in `server.py:62-63`:
+
+```python
+context.minimum_version = ssl.TLSVersion.TLSv1_2
+context.set_ciphers('ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20:!aNULL:!MD5:!DSS')
+```
+
+This enforces:
+- Minimum TLS 1.2 (no legacy protocols)
+- Perfect forward secrecy (ECDHE/DHE key exchange)
+- Authenticated encryption (AESGCM/CHACHA20)
+- No anonymous or weak ciphers
+
+## Threat model
+
+pyMessenger's architecture protects against:
+
+<Accordion title="Passive network eavesdropping">
+Both TLS and E2EE layers encrypt all data in transit. An attacker monitoring network traffic sees only encrypted ciphertext with no way to decrypt it.
+</Accordion>
+
+<Accordion title="Server compromise">
+End-to-end encryption ensures that even if the server is fully compromised, the attacker cannot read message content. The server never has access to private keys or plaintext messages.
+</Accordion>
+
+<Accordion title="Message tampering">
+AES-EAX mode provides authenticated encryption with a 128-bit authentication tag (`client.py:946`). Any modification to the ciphertext causes decryption to fail, preventing tampering attacks.
+</Accordion>
+
+<Accordion title="Man-in-the-middle attacks">
+TLS with certificate verification prevents MITM attacks at the transport layer. At the application layer, public keys are authenticated during registration and stored server-side, preventing key substitution attacks.
+</Accordion>
+
+## What the server knows
+
+Transparency is important for security. The server can see:
+
+- **Usernames** of registered accounts
+- **Connection metadata** (who is online, when they connect)
+- **Message routing** (who is sending to whom)
+- **Public keys** for all users
+
+The server **cannot** see:
+
+- **Passwords** (only salted hashes are stored)
+- **Private keys** (stored encrypted on client devices only)
+- **Message content** (encrypted end-to-end)
+- **File content** (encrypted in 64KB chunks with per-chunk keys)
+
+## File transfer security
+
+File transfers use the same E2EE architecture with additional protections:
+
+- **Chunk-based encryption**: Files are split into 64KB chunks (`client.py:1012`)
+- **Per-chunk keys**: Each chunk gets a unique AES-256 key
+- **Zero server storage**: Files are never saved on the server
+- **Streaming design**: Server relays encrypted chunks without buffering entire files
+
+You can review the file transfer implementation in `client.py:1009-1069`.
+
+## Security best practices
+
+To maximize your security when using pyMessenger:
+
+1. **Use strong passwords**: Your private key is protected by your password. Choose something long and unique.
+2. **Verify the server certificate**: The client checks this automatically, but ensure you're connecting to the right server.
+3. **Keep your password safe**: If someone gets your password, they can decrypt your private key and read messages sent to you.
+4. **Update regularly**: Security improvements are added in new versions.
+
+<Note>
+Your private key is stored encrypted at `~/.secure_messenger_client/keys/{username}_private.key` using AES-256-GCM with a key derived from your password via PBKDF2-SHA256 (100,000 iterations).
+</Note>

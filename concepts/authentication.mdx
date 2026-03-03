@@ -1,0 +1,313 @@
+---
+title: Authentication
+description: Learn how pyMessenger's challenge-response authentication system protects your credentials
+---
+
+pyMessenger uses a sophisticated challenge-response authentication protocol that never transmits your password after initial registration. This page explains how the system works and why it's more secure than traditional password-based authentication.
+
+## Authentication overview
+
+There are two distinct authentication processes:
+
+1. **Registration**: First-time account creation (password is sent over TLS)
+2. **Login**: Subsequent authentication (password never transmitted)
+
+<Note>
+During registration, your password is sent over TLS to derive a server-side hash. After that, your password never leaves your device.
+</Note>
+
+## Registration flow
+
+When you create a new account, the following happens (`client.py:255-304`):
+
+### Step 1: Generate keys locally
+
+Your device generates a 2048-bit RSA keypair:
+
+```python
+rsa_key = RSA.generate(2048)
+private_key_bytes = rsa_key.export_key()
+public_key_bytes = rsa_key.publickey().export_key()
+```
+
+### Step 2: Encrypt private key
+
+Your private key is immediately encrypted using your password and stored locally:
+
+```python
+self.key_manager.save_private_key(username, private_key_bytes, password)
+```
+
+The encryption process uses:
+- PBKDF2-SHA256 with 100,000 iterations to derive an encryption key from your password
+- AES-256-GCM to encrypt the private key
+- Random 128-bit salt
+
+### Step 3: Register with server
+
+Your device sends to the server:
+- Username
+- Password (one-time only, over TLS)
+- Public key
+
+The server stores (`user_store.py:98-114`):
+- PBKDF2 hash of your password (with 256-bit salt)
+- Your public key
+- Account metadata
+
+<Info>
+Your password is sent during registration because the server needs to create a verifiable hash. However, this happens over TLS, so the password is encrypted in transit.
+</Info>
+
+## Challenge-response login
+
+Subsequent logins use a challenge-response protocol that never transmits your password. This is where pyMessenger's authentication really shines.
+
+### The authentication dance
+
+```
+┌────────────┐                                    ┌────────────┐
+│   CLIENT   │                                    │   SERVER   │
+└─────┬──────┘                                    └─────┬──────┘
+      │                                                 │
+      │  1. Login Request (username + public key)       │
+      ├────────────────────────────────────────────────►│
+      │                                                 │
+      │                                                 │ Generate
+      │                                                 │ Random
+      │                                                 │ Nonce
+      │                                                 │
+      │  2. Challenge (nonce + salt)                    │
+      │◄────────────────────────────────────────────────┤
+      │                                                 │
+      │ Derive password key                             │
+      │ from password + salt                            │
+      │                                                 │
+      │ response = HMAC-SHA256(                         │
+      │   key=password_key,                             │
+      │   msg=nonce                                     │
+      │ )                                               │
+      │                                                 │
+      │  3. Response (HMAC signature)                   │
+      ├────────────────────────────────────────────────►│
+      │                                                 │
+      │                                                 │ Verify
+      │                                                 │ HMAC with
+      │                                                 │ stored key
+      │                                                 │
+      │  4. Session Token (if valid)                    │
+      │◄────────────────────────────────────────────────┤
+      │                                                 │
+```
+
+### Step 1: Login request
+
+The client sends (`client.py:433-440`):
+
+```python
+auth_request = {
+    'type': 'auth_request',
+    'auth_type': 'login',
+    'username': username,
+    'pubkey': base64.b64encode(public_key_bytes).decode('utf-8')
+}
+```
+
+Note that the password is **not included**.
+
+### Step 2: Server creates challenge
+
+The server generates a cryptographically random nonce and retrieves your salt (`user_store.py:161-183`):
+
+```python
+nonce = base64.b64encode(get_random_bytes(32)).decode('utf-8')
+
+stored_hash = user['password_hash']
+stored_bytes = base64.b64decode(stored_hash)
+salt = stored_bytes[:32]
+salt_b64 = base64.b64encode(salt).decode('utf-8')
+```
+
+The server sends both the nonce and salt back to you.
+
+### Step 3: Client computes response
+
+You derive the same key the server has stored, then compute an HMAC (`client.py:470-482`):
+
+```python
+salt = base64.b64decode(salt_b64)
+
+password_key = PBKDF2(
+    password.encode('utf-8'),
+    salt,
+    32,
+    count=100000,
+    hmac_hash_module=SHA256
+)
+
+response_hash = hmac.new(password_key, nonce_bytes, hashlib.sha256).digest()
+response_b64 = base64.b64encode(response_hash).decode('utf-8')
+```
+
+### Step 4: Server verifies response
+
+The server computes the expected HMAC using its stored key and compares (`user_store.py:234-239`):
+
+```python
+nonce_bytes = challenge['nonce'].encode('utf-8')
+expected_response = hmac.new(stored_key, nonce_bytes, hashlib.sha256).digest()
+expected_response_b64 = base64.b64encode(expected_response).decode('utf-8')
+
+if not hmac.compare_digest(response, expected_response_b64):
+    # Authentication failed
+```
+
+If the response matches, the server creates a session token.
+
+## Security features
+
+### No password transmission
+
+After registration, your password is never sent over the network. The HMAC response proves you know the password without revealing it.
+
+<Accordion title="How does this work?">
+HMAC is a one-way function. Given the HMAC output, it's computationally infeasible to recover the key (your password-derived key). But if you know the key, you can verify the HMAC is correct.
+
+This is similar to how you can verify someone knows a secret without them telling you the secret.
+</Accordion>
+
+### Replay protection
+
+Each nonce is:
+- Generated from a cryptographically secure random source (`get_random_bytes(32)`)
+- Used only once
+- Time-limited to 5 minutes (`user_store.py:46`)
+
+If an attacker captures your HMAC response, they can't replay it because:
+1. The nonce is already used and won't be issued again
+2. The challenge expires after 5 minutes
+
+You can see the timeout enforcement in `user_store.py:217-223`:
+
+```python
+if time.time() - challenge['timestamp'] > self.CHALLENGE_TIMEOUT:
+    del self.active_challenges[username]
+    return False, "Authentication session expired. Please try again."
+```
+
+### Constant-time comparison
+
+The server uses `hmac.compare_digest()` to verify your response (`user_store.py:239`). This prevents timing attacks.
+
+<Accordion title="What is a timing attack?">
+A naive string comparison stops as soon as it finds a difference:
+
+```python
+if response == expected:  # BAD: timing attack vulnerable
+```
+
+An attacker can measure how long the comparison takes. If it takes longer, they know more characters were correct. By trying many guesses and timing each one, they can gradually reconstruct the correct response.
+
+Constant-time comparison always checks every character, taking the same time regardless of where the difference occurs:
+
+```python
+if hmac.compare_digest(response, expected):  # GOOD: constant time
+```
+</Accordion>
+
+### Rate limiting
+
+The server enforces strict rate limiting to prevent brute force attacks (`user_store.py:40-42`):
+
+- **Maximum 5 failed attempts** in a 5-minute window
+- **15-minute lockout** after 5 failed attempts  
+- **Automatic unlock** after the lockout period
+
+The implementation tracks attempts per username (`user_store.py:129-152`):
+
+```python
+self.login_attempts[username].append(current_time)
+
+if len(self.login_attempts[username]) >= self.MAX_LOGIN_ATTEMPTS:
+    unlock_time = current_time + self.LOCKOUT_DURATION
+    self.locked_accounts[username] = unlock_time
+```
+
+<Note>
+Rate limiting is applied **before** the expensive PBKDF2 computation, preventing resource exhaustion attacks.
+</Note>
+
+### Username enumeration prevention
+
+The server uses constant-time responses even when a username doesn't exist (`user_store.py:203-205`):
+
+```python
+if not user:
+    time.sleep(0.5)
+    return False, "Invalid username or password."
+```
+
+This prevents attackers from determining which usernames are valid by timing the response.
+
+## Session management
+
+After successful authentication, the server issues a session token (`server.py:129-135`):
+
+```python
+def create_session(self, username):
+    token = self.generate_session_token()
+    with self.lock:
+        self.sessions[token] = {
+            'username': username,
+            'expires': time.time() + self.SESSION_TIMEOUT
+        }
+    return token
+```
+
+Session tokens:
+- Are cryptographically random (generated with `secrets.token_urlsafe(32)`)
+- Expire after 24 hours (`server.py:34`)
+- Are validated on each request
+
+## Public key verification
+
+During login, the server also verifies that your public key matches the one registered (`server.py:292-303`):
+
+```python
+pubkey_bytes = base64.b64decode(pubkey_b64)
+stored_pubkey = base64.b64decode(
+    self.user_store.users_db[username]['public_key']
+)
+if pubkey_bytes != stored_pubkey:
+    send_json(client_socket, {
+        'type': 'auth_result',
+        'success': False,
+        'message': 'Public key mismatch'
+    })
+```
+
+This prevents an attacker from authenticating with a different keypair even if they somehow obtained your password.
+
+## Audit logging
+
+All authentication events are logged to `~/.secure_messenger/logs/security.log` (`user_store.py:62-65`):
+
+- Successful logins with IP address
+- Failed login attempts
+- Account lockouts
+- Challenge creation and verification
+
+You can review the logging implementation in `user_store.py:182`, `user_store.py:263-266`, and throughout the `verify_challenge_response` function.
+
+## Best practices
+
+To keep your account secure:
+
+1. **Choose a strong password**: It protects your encrypted private key
+2. **Don't share your password**: Not even the server sees it after registration  
+3. **Protect your key file**: Located at `~/.secure_messenger_client/keys/{username}_private.key`
+4. **Monitor for lockouts**: Multiple failed attempts may indicate an attack
+
+<Info>
+If you forget your password, you cannot recover your account. The server doesn't have enough information to reset it. Choose a password you'll remember or store it in a password manager.
+</Info>

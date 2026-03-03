@@ -1,0 +1,556 @@
+---
+title: Configuration reference
+description: Server and client configuration options for pyMessenger
+---
+
+This page documents all configuration options available for the pyMessenger server and client applications.
+
+## Server configuration
+
+The server application (`server.py`) can be configured through command-line arguments and runtime parameters.
+
+### Command-line arguments
+
+Start the server with custom settings:
+
+```bash
+python3 server.py --host <address> --port <port>
+```
+
+<ResponseField name="--host" type="string" default="0.0.0.0">
+  Network interface to bind to.
+  
+  **Examples:**
+  - `0.0.0.0` - Listen on all interfaces (default)
+  - `127.0.0.1` - Localhost only
+  - `192.168.1.100` - Specific network interface
+</ResponseField>
+
+<ResponseField name="--port" type="integer" default="1315">
+  TCP port to listen on.
+  
+  **Range:** 1024-65535 (ports below 1024 require root)
+  
+  **Default:** 1315
+</ResponseField>
+
+### Server parameters
+
+These parameters are configured in the `Server` class (`server.py:20-37`):
+
+<ResponseField name="SESSION_TIMEOUT" type="integer" default="86400">
+  Session token lifetime in seconds.
+  
+  **Default:** 86,400 seconds (24 hours)
+  
+  **Location:** `server.py:34`
+  
+  After this period, users must re-authenticate.
+</ResponseField>
+
+<ResponseField name="socket.listen" type="integer" default="5">
+  Maximum number of queued connections.
+  
+  **Default:** 5
+  
+  **Location:** `server.py:333`
+  
+  This sets the backlog for the listening socket.
+</ResponseField>
+
+<ResponseField name="socket.settimeout" type="float" default="1.0">
+  Socket timeout for accepting new connections.
+  
+  **Default:** 1.0 seconds
+  
+  **Location:** `server.py:330`
+  
+  Allows graceful shutdown when checking `self.running` flag.
+</ResponseField>
+
+### SSL/TLS configuration
+
+<ResponseField name="cert_dir" type="path" default="~/.secure_messenger/certs">
+  Directory containing SSL/TLS certificates.
+  
+  **Files required:**
+  - `server.crt` - Server certificate
+  - `server.key` - Server private key
+  
+  **Location:** `server.py:41-43`
+</ResponseField>
+
+<ResponseField name="ssl.PROTOCOL_TLS_SERVER" type="constant">
+  SSL protocol version selector.
+  
+  **Location:** `server.py:58`
+  
+  Automatically selects the highest TLS version supported by both client and server.
+</ResponseField>
+
+<ResponseField name="ssl.minimum_version" type="constant" default="TLSv1_2">
+  Minimum acceptable TLS version.
+  
+  **Default:** TLS 1.2
+  
+  **Location:** `server.py:62`
+  
+  Rejects connections using TLS 1.1 or older.
+</ResponseField>
+
+<ResponseField name="ssl.set_ciphers" type="string">
+  Cipher suite configuration.
+  
+  **Default:** `ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20:!aNULL:!MD5:!DSS`
+  
+  **Location:** `server.py:63`
+  
+  **Breakdown:**
+  - `ECDHE+AESGCM` - Elliptic Curve Diffie-Hellman + AES-GCM
+  - `ECDHE+CHACHA20` - Elliptic Curve Diffie-Hellman + ChaCha20-Poly1305
+  - `DHE+AESGCM` - Diffie-Hellman + AES-GCM
+  - `DHE+CHACHA20` - Diffie-Hellman + ChaCha20-Poly1305
+  - `!aNULL` - Exclude anonymous (no authentication) ciphers
+  - `!MD5` - Exclude MD5-based ciphers
+  - `!DSS` - Exclude DSS-based ciphers
+</ResponseField>
+
+<Note>
+All cipher suites provide Perfect Forward Secrecy (PFS) through ephemeral key exchange (ECDHE/DHE).
+</Note>
+
+### Authentication parameters
+
+Authentication settings are configured in `UserStore` class (`user_store.py:38-46`):
+
+<ResponseField name="MAX_LOGIN_ATTEMPTS" type="integer" default="5">
+  Maximum failed login attempts before account lockout.
+  
+  **Default:** 5 attempts
+  
+  **Location:** `user_store.py:40`
+</ResponseField>
+
+<ResponseField name="LOCKOUT_DURATION" type="integer" default="900">
+  Account lockout duration in seconds.
+  
+  **Default:** 900 seconds (15 minutes)
+  
+  **Location:** `user_store.py:41`
+  
+  After 5 failed login attempts, the account is locked for this duration.
+</ResponseField>
+
+<ResponseField name="RATE_LIMIT_WINDOW" type="integer" default="300">
+  Time window for rate limiting in seconds.
+  
+  **Default:** 300 seconds (5 minutes)
+  
+  **Location:** `user_store.py:42`
+  
+  Failed login attempts are counted within this sliding window.
+</ResponseField>
+
+<ResponseField name="CHALLENGE_TIMEOUT" type="integer" default="300">
+  Challenge-response timeout in seconds.
+  
+  **Default:** 300 seconds (5 minutes)
+  
+  **Location:** `user_store.py:46`
+  
+  Authentication challenges expire after this period.
+</ResponseField>
+
+<Warning>
+These security parameters should not be reduced, as they protect against brute force attacks.
+</Warning>
+
+### Cryptographic parameters
+
+<ResponseField name="PBKDF2 iterations" type="integer" default="100000">
+  Number of PBKDF2 iterations for password hashing.
+  
+  **Default:** 100,000 iterations
+  
+  **Location:** `user_store.py:93`
+  
+  This slows down brute force attacks on password hashes.
+</ResponseField>
+
+<ResponseField name="Salt size" type="integer" default="32">
+  Salt size for password hashing in bytes.
+  
+  **Default:** 32 bytes (256 bits)
+  
+  **Location:** `user_store.py:92`
+  
+  Each password gets a unique random salt.
+</ResponseField>
+
+## Client configuration
+
+The client application (`client.py`) can be configured through command-line arguments and class parameters.
+
+### Command-line arguments
+
+Start the client with custom settings:
+
+```bash
+python3 client.py --host <address> --port <port>
+```
+
+<ResponseField name="--host" type="string" default="localhost">
+  Server address to connect to.
+  
+  **Examples:**
+  - `localhost` - Local server (default)
+  - `192.168.1.100` - Remote server IP
+  - `messenger.example.com` - Remote server hostname
+  
+  **Location:** `client.py:1437-1438`
+</ResponseField>
+
+<ResponseField name="--port" type="integer" default="1315">
+  Server port to connect to.
+  
+  **Default:** 1315
+  
+  **Location:** `client.py:1439-1440`
+</ResponseField>
+
+### Client parameters
+
+These parameters are configured in the `Client` class (`client.py:150-183`):
+
+<ResponseField name="message_history" type="deque" default="maxlen=100">
+  In-memory message history buffer.
+  
+  **Default:** Last 100 messages
+  
+  **Location:** `client.py:163`
+  
+  Older messages are automatically discarded when the buffer is full.
+</ResponseField>
+
+<ResponseField name="recv buffer" type="integer" default="4096">
+  Socket receive buffer size in bytes.
+  
+  **Default:** 4096 bytes
+  
+  **Location:** `client.py:66`
+  
+  Used when receiving JSON messages from the server.
+</ResponseField>
+
+### SSL/TLS configuration
+
+<ResponseField name="cert_file" type="path" default="~/.secure_messenger/certs/server.crt">
+  Server certificate for validation.
+  
+  **Location:** `client.py:193`
+  
+  **Required:** Yes - client refuses to connect without this file
+  
+  Copy `server.crt` from the server to this location.
+</ResponseField>
+
+<ResponseField name="ssl.PROTOCOL_TLS_CLIENT" type="constant">
+  SSL protocol version selector for clients.
+  
+  **Location:** `client.py:189`
+</ResponseField>
+
+<ResponseField name="ssl.minimum_version" type="constant" default="TLSv1_2">
+  Minimum acceptable TLS version.
+  
+  **Default:** TLS 1.2
+  
+  **Location:** `client.py:209`
+</ResponseField>
+
+<ResponseField name="ssl.check_hostname" type="boolean" default="false">
+  Hostname verification setting.
+  
+  **Default:** `false`
+  
+  **Location:** `client.py:198`
+  
+  Disabled because the server typically uses IP addresses or localhost, not proper hostnames.
+</ResponseField>
+
+<ResponseField name="ssl.verify_mode" type="constant" default="CERT_REQUIRED">
+  Certificate verification mode.
+  
+  **Default:** `ssl.CERT_REQUIRED`
+  
+  **Location:** `client.py:199`
+  
+  The client requires a valid certificate to connect.
+</ResponseField>
+
+<Warning>
+The client will not connect if `server.crt` is missing or invalid. This prevents man-in-the-middle attacks.
+</Warning>
+
+### Key storage configuration
+
+<ResponseField name="config_dir" type="path" default="~/.secure_messenger_client">
+  Root directory for client configuration.
+  
+  **Location:** `client.py:80`
+  
+  **Permissions:** 0700 (owner-only access on Unix)
+</ResponseField>
+
+<ResponseField name="keys_dir" type="path" default="~/.secure_messenger_client/keys">
+  Directory for encrypted private keys.
+  
+  **Location:** `client.py:81`
+  
+  **Format:** `{username}_private.key`
+  
+  **Permissions:** 0700 (directory), 0600 (files)
+</ResponseField>
+
+<ResponseField name="files_dir" type="path" default="~/.secure_messenger_client/files">
+  Root directory for file transfers.
+  
+  **Location:** `client.py:82`
+  
+  **Subdirectories:**
+  - `received/` - Files received from others
+  - `sent/` - Copies of files you've sent
+</ResponseField>
+
+### File transfer configuration
+
+<ResponseField name="CHUNK_SIZE" type="integer" default="65536">
+  File chunk size in bytes.
+  
+  **Default:** 65,536 bytes (64 KB)
+  
+  **Location:** `client.py:1012`
+  
+  Files are split into chunks of this size for encryption and transmission.
+</ResponseField>
+
+### Cryptographic configuration
+
+<ResponseField name="RSA key size" type="integer" default="2048">
+  RSA keypair size in bits.
+  
+  **Default:** 2048 bits
+  
+  **Location:** `client.py:293`
+  
+  Generated during account registration.
+</ResponseField>
+
+<ResponseField name="AES key size" type="integer" default="32">
+  AES key size in bytes.
+  
+  **Default:** 32 bytes (256 bits)
+  
+  **Location:** `client.py:944`
+  
+  A new random key is generated for each message.
+</ResponseField>
+
+<ResponseField name="PBKDF2 iterations" type="integer" default="100000">
+  Number of PBKDF2 iterations for key derivation.
+  
+  **Default:** 100,000 iterations
+  
+  **Location:** `client.py:105`
+  
+  Used for encrypting private keys with user passwords.
+</ResponseField>
+
+<ResponseField name="Salt size" type="integer" default="16">
+  Salt size for private key encryption in bytes.
+  
+  **Default:** 16 bytes (128 bits)
+  
+  **Location:** `client.py:111`
+</ResponseField>
+
+## Server directory structure
+
+The server creates the following directory structure at runtime:
+
+```
+~/.secure_messenger/
+├── certs/
+│   ├── server.crt           # Server TLS certificate
+│   └── server.key           # Server private key
+├── logs/
+│   └── security.log         # Authentication and security events
+├── keys/
+│   └── (server keys)        # Public keys only (no private keys)
+└── users.json              # User database (hashed passwords + metadata)
+```
+
+<ResponseField name="~/.secure_messenger" type="directory">
+  **Permissions:** 0700 (Unix/Linux)
+  
+  **Created by:** `UserStore._initialize_directories()` (`user_store.py:48-56`)
+</ResponseField>
+
+<ResponseField name="~/.secure_messenger/certs" type="directory">
+  Contains TLS/SSL certificates for encrypted transport.
+  
+  **Created by:** `generate_certificates.py`
+</ResponseField>
+
+<ResponseField name="~/.secure_messenger/logs" type="directory">
+  Contains security audit logs.
+  
+  **Files:**
+  - `security.log` - Authentication events, failed login attempts, account lockouts
+  
+  **Location:** `user_store.py:62`
+</ResponseField>
+
+<ResponseField name="~/.secure_messenger/keys" type="directory">
+  Reserved for server-side key storage (currently unused).
+  
+  **Permissions:** 0700
+</ResponseField>
+
+<ResponseField name="~/.secure_messenger/users.json" type="file">
+  User database containing:
+  - Usernames
+  - Hashed passwords (PBKDF2-SHA256)
+  - Public keys (Base64-encoded)
+  - Account metadata (creation time, last login)
+  
+  **Permissions:** 0600 (Unix/Linux)
+  
+  **Format:** JSON
+  
+  **Location:** `user_store.py:26`
+</ResponseField>
+
+## Client directory structure
+
+The client creates the following directory structure at runtime:
+
+### Linux/macOS
+
+```
+~/.secure_messenger_client/
+├── keys/
+│   └── {username}_private.key  # Encrypted RSA private key
+└── files/
+    ├── received/               # Files received from others
+    └── sent/                   # Copies of sent files
+```
+
+### Windows
+
+```
+C:\Users\[YOUR_USER]\.secure_messenger_client\
+├── keys\
+│   └── {username}_private.key  # Encrypted RSA private key
+└── files\
+    ├── received\               # Files received from others
+    └── sent\                   # Copies of sent files
+```
+
+<ResponseField name="~/.secure_messenger_client" type="directory">
+  **Permissions:** 0700 (Unix/Linux)
+  
+  **Created by:** `KeyManager._initialize_directories()` (`client.py:87-97`)
+</ResponseField>
+
+<ResponseField name="~/.secure_messenger_client/keys" type="directory">
+  Contains encrypted private keys.
+  
+  **File format:** `{username}_private.key`
+  
+  **Encryption:** AES-256-GCM with password-derived key
+  
+  **Permissions:** 0700 (directory), 0600 (files)
+</ResponseField>
+
+<ResponseField name="~/.secure_messenger_client/files/received" type="directory">
+  Files received from other users.
+  
+  **Naming:** Files are prefixed with sender's username: `{sender}_{filename}`
+  
+  **Example:** `alice_report.pdf`
+</ResponseField>
+
+<ResponseField name="~/.secure_messenger_client/files/sent" type="directory">
+  Copies of files you've sent to others.
+  
+  **Purpose:** Record keeping
+</ResponseField>
+
+<Note>
+All directories are created automatically on first run. You don't need to create them manually.
+</Note>
+
+## Environment variables
+
+pyMessenger does not use environment variables for configuration. All settings are controlled through:
+- Command-line arguments
+- Class constants in source files
+- Runtime directory structure
+
+## Logging configuration
+
+Server logging is configured in `user_store.py:58-65`:
+
+<ResponseField name="Logger name" type="string" default="UserStore">
+  Logger identifier.
+  
+  **Location:** `user_store.py:60`
+</ResponseField>
+
+<ResponseField name="Log level" type="constant" default="INFO">
+  Minimum log level.
+  
+  **Default:** `logging.INFO`
+  
+  **Location:** `user_store.py:61`
+  
+  Logs INFO, WARNING, and ERROR messages.
+</ResponseField>
+
+<ResponseField name="Log file" type="path" default="~/.secure_messenger/logs/security.log">
+  Path to security audit log.
+  
+  **Location:** `user_store.py:62`
+  
+  **Encoding:** UTF-8
+</ResponseField>
+
+<ResponseField name="Log format" type="string">
+  Log message format.
+  
+  **Default:** `%(asctime)s - %(levelname)s - %(message)s`
+  
+  **Location:** `user_store.py:63`
+  
+  **Example output:**
+  ```
+  2026-03-03 14:23:45,123 - INFO - User authenticated successfully: alice (IP: 192.168.1.100)
+  ```
+</ResponseField>
+
+### Logged events
+
+The following events are logged to `security.log`:
+
+- User registration
+- Authentication challenges created
+- Successful logins with IP addresses
+- Failed login attempts with IP addresses
+- Account lockouts
+- Expired challenges
+- Invalid authentication responses
+
+<Info>
+Check `security.log` to monitor authentication activity and detect potential security issues.
+</Info>

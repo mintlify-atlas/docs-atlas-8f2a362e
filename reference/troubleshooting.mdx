@@ -1,0 +1,667 @@
+---
+title: Troubleshooting guide
+description: Common issues and solutions for pyMessenger
+---
+
+This page helps you diagnose and resolve common issues with pyMessenger.
+
+## Connection issues
+
+### Client cannot connect to server
+
+<Accordion title="Error: Connection refused">
+  **Symptoms:**
+  ```
+  ✗ Could not connect to server
+  ```
+  
+  **Causes:**
+  - Server is not running
+  - Wrong host/port specified
+  - Firewall blocking connection
+  
+  **Solutions:**
+  
+  1. **Verify server is running:**
+     ```bash
+     # Check if server process is running
+     ps aux | grep server.py
+     
+     # Check if port 1315 is listening
+     netstat -an | grep 1315
+     # or on Linux:
+     ss -tuln | grep 1315
+     ```
+  
+  2. **Verify host and port:**
+     ```bash
+     # Client connecting to localhost
+     python3 client.py --host localhost --port 1315
+     
+     # Client connecting to remote server
+     python3 client.py --host 192.168.1.100 --port 1315
+     ```
+  
+  3. **Check firewall rules:**
+     ```bash
+     # Linux (ufw)
+     sudo ufw allow 1315/tcp
+     
+     # Linux (firewalld)
+     sudo firewall-cmd --add-port=1315/tcp --permanent
+     sudo firewall-cmd --reload
+     ```
+  
+  4. **Verify server binding:**
+     - Server should bind to `0.0.0.0` for remote connections
+     - Server bound to `127.0.0.1` only accepts localhost connections
+     
+     ```bash
+     # Accept connections from any network interface
+     python3 server.py --host 0.0.0.0 --port 1315
+     ```
+</Accordion>
+
+<Accordion title="Error: SSL connection failed / SSL handshake failed">
+  **Symptoms:**
+  ```
+  ✗ SSL connection failed: [SSL: CERTIFICATE_VERIFY_FAILED]
+  ✗ Server certificate not found at ~/.secure_messenger/certs/server.crt
+  ```
+  
+  **Causes:**
+  - Missing or invalid TLS certificate
+  - Client doesn't have server certificate
+  - Certificate/key mismatch
+  
+  **Solutions:**
+  
+  1. **Generate certificates:**
+     ```bash
+     python3 generate_certificates.py
+     ```
+     
+     This creates:
+     - `~/.secure_messenger/certs/server.crt`
+     - `~/.secure_messenger/certs/server.key`
+  
+  2. **Copy certificate to client:**
+     ```bash
+     # Create client cert directory
+     mkdir -p ~/.secure_messenger/certs
+     
+     # Copy server certificate
+     cp ~/.secure_messenger/certs/server.crt ~/.secure_messenger/certs/
+     ```
+     
+     **For remote clients:**
+     ```bash
+     # On server machine
+     scp ~/.secure_messenger/certs/server.crt user@client-machine:~/.secure_messenger/certs/
+     ```
+  
+  3. **Verify certificate exists:**
+     ```bash
+     ls -la ~/.secure_messenger/certs/
+     # Should show server.crt and server.key
+     ```
+  
+  4. **Check certificate validity:**
+     ```bash
+     openssl x509 -in ~/.secure_messenger/certs/server.crt -text -noout
+     # Check "Not After" date
+     ```
+     
+     Certificates are valid for 365 days. Regenerate if expired.
+</Accordion>
+
+<Accordion title="Client connects but immediately disconnects">
+  **Symptoms:**
+  - Connection established
+  - "Server disconnected" message appears immediately
+  
+  **Causes:**
+  - TLS version mismatch
+  - Cipher suite incompatibility
+  - Server rejected connection
+  
+  **Solutions:**
+  
+  1. **Check server logs** for SSL errors:
+     ```bash
+     # Look for SSL handshake failures
+     grep "SSL" ~/.secure_messenger/logs/security.log
+     ```
+  
+  2. **Verify TLS 1.2+ is available:**
+     ```bash
+     python3 -c "import ssl; print(ssl.OPENSSL_VERSION)"
+     # Should show OpenSSL 1.0.2 or newer
+     ```
+  
+  3. **Check Python SSL support:**
+     ```bash
+     python3 -c "import ssl; print(ssl.HAS_TLSv1_2)"
+     # Should print True
+     ```
+</Accordion>
+
+## Authentication issues
+
+### Login failures
+
+<Accordion title="Error: Account locked">
+  **Symptoms:**
+  ```
+  ✗ Account locked. Try again in XXX seconds.
+  ✗ Account locked due to too many failed attempts. Try again in 15 minutes.
+  ```
+  
+  **Cause:**
+  - 5 failed login attempts within 15 minutes
+  
+  **Solution:**
+  
+  1. **Wait for lockout to expire:**
+     - Lockout duration: 15 minutes (900 seconds)
+     - Counter resets after successful login
+  
+  2. **Check security logs:**
+     ```bash
+     tail -f ~/.secure_messenger/logs/security.log
+     # Look for lockout entries
+     ```
+  
+  3. **Reset lockout (server admin):**
+     Restart the server to clear in-memory lockouts:
+     ```bash
+     # Stop server (Ctrl+C)
+     # Start server again
+     python3 server.py
+     ```
+     
+     <Warning>
+     This clears all active sessions and lockouts.
+     </Warning>
+</Accordion>
+
+<Accordion title="Error: Incorrect password">
+  **Symptoms:**
+  ```
+  ✗ Incorrect password
+  ```
+  
+  **Causes:**
+  - Wrong password entered
+  - Wrong username entered
+  - Password was changed on different client
+  
+  **Solutions:**
+  
+  1. **Verify username is correct:**
+     ```bash
+     # Check if key file exists for this username
+     ls ~/.secure_messenger_client/keys/
+     # Should show {username}_private.key
+     ```
+  
+  2. **Case sensitivity:**
+     - Usernames and passwords are case-sensitive
+     - `Alice` ≠ `alice`
+  
+  3. **Password recovery:**
+     - There is no password recovery mechanism
+     - If you forget your password, you cannot decrypt your private key
+     - You must create a new account
+     
+     <Warning>
+     Private keys are encrypted with your password. If you lose the password, the key is permanently inaccessible.
+     </Warning>
+</Accordion>
+
+<Accordion title="Error: No account found for username">
+  **Symptoms:**
+  ```
+  ✗ No account found for username 'alice'
+  ```
+  
+  **Causes:**
+  - Account was created on a different client machine
+  - Account doesn't exist on this client
+  - Different server instance
+  
+  **Solutions:**
+  
+  1. **Register account:**
+     - Select option 1 (Create new account)
+     - Use the same username as on the server
+  
+  2. **Copy key from another machine:**
+     ```bash
+     # From machine where account exists
+     scp ~/.secure_messenger_client/keys/alice_private.key user@new-machine:~/.secure_messenger_client/keys/
+     ```
+     
+     Then login with the same password.
+  
+  3. **Verify server has the account:**
+     - Check server's `users.json`:
+     ```bash
+     cat ~/.secure_messenger/users.json | grep "alice"
+     ```
+</Accordion>
+
+<Accordion title="Error: Invalid username or password">
+  **Symptoms:**
+  ```
+  ✗ Invalid username or password. X attempts remaining.
+  ```
+  
+  **Causes:**
+  - Failed challenge-response verification
+  - Network issue during authentication
+  - Public key mismatch
+  
+  **Solutions:**
+  
+  1. **Double-check credentials:**
+     - Ensure username is spelled correctly
+     - Ensure password is correct
+  
+  2. **Check for public key mismatch:**
+     - This can happen if you registered twice with the same username
+     - Delete local key and re-register:
+     ```bash
+     rm ~/.secure_messenger_client/keys/{username}_private.key
+     # Then register new account
+     ```
+  
+  3. **Network timeout during authentication:**
+     - Challenge expires after 5 minutes
+     - Try logging in again immediately
+</Accordion>
+
+## Message delivery issues
+
+<Accordion title="Messages not being received">
+  **Symptoms:**
+  - You send messages but recipient doesn't see them
+  - No error messages displayed
+  
+  **Causes:**
+  - Recipient is offline
+  - You're in a private room with a different user
+  - Server connection lost
+  
+  **Solutions:**
+  
+  1. **Check recipient is online:**
+     ```
+     /users
+     ```
+     Lists all online users.
+  
+  2. **Check your current mode:**
+     - Look at the top of the screen
+     - `[BROADCAST MODE]` - messages go to all users
+     - `[PRIVATE ROOM: username]` - messages only go to that user
+  
+  3. **Leave private room if needed:**
+     ```
+     /leave
+     ```
+  
+  4. **Verify connection:**
+     - If you see "Server disconnected", you need to reconnect
+     - Exit and restart the client
+</Accordion>
+
+<Accordion title="Error: Decrypt failed">
+  **Symptoms:**
+  ```
+  ⚠ Decrypt failed from alice
+  ```
+  
+  **Causes:**
+  - Public key mismatch
+  - Message corruption
+  - Different RSA keypair on sender's client
+  
+  **Solutions:**
+  
+  1. **Ask sender to verify their keypair:**
+     - Sender should log out and log back in
+     - Ensure they're using the same key that was registered
+  
+  2. **Both users re-register:**
+     - If keys are mismatched, create new accounts
+     - Server stores public keys during registration
+  
+  3. **Check for network issues:**
+     - Message corruption during transmission is rare with TCP
+     - More likely a key mismatch problem
+</Accordion>
+
+<Accordion title="User already connected error">
+  **Symptoms:**
+  ```
+  User already connected
+  ```
+  
+  **Causes:**
+  - You're logged in from another client
+  - Previous connection didn't close cleanly
+  
+  **Solutions:**
+  
+  1. **Close other client instances:**
+     - Check other terminal windows
+     - Check other machines
+  
+  2. **Wait for timeout:**
+     - Server may still think you're connected
+     - Wait 30-60 seconds and try again
+  
+  3. **Restart server (admin):**
+     ```bash
+     # Stop and restart server to clear all connections
+     # Press Ctrl+C on server
+     python3 server.py
+     ```
+</Accordion>
+
+## File transfer issues
+
+<Accordion title="File transfer fails to start">
+  **Symptoms:**
+  ```
+  ✗ File offer failed: User not online
+  ```
+  
+  **Causes:**
+  - Recipient is offline
+  - Recipient username misspelled
+  
+  **Solutions:**
+  
+  1. **Check recipient is online:**
+     ```
+     /users
+     ```
+  
+  2. **Verify filename and path:**
+     ```bash
+     # Use absolute paths or check current directory
+     /sendfile alice ~/Documents/report.pdf
+     
+     # Verify file exists
+     ls -la ~/Documents/report.pdf
+     ```
+  
+  3. **Check file permissions:**
+     ```bash
+     # Ensure file is readable
+     chmod 644 ~/Documents/report.pdf
+     ```
+</Accordion>
+
+<Accordion title="File transfer interrupted">
+  **Symptoms:**
+  - Transfer starts but stops mid-way
+  - Progress stops updating
+  
+  **Causes:**
+  - Network connection lost
+  - Recipient disconnected
+  - Server crashed
+  
+  **Solutions:**
+  
+  1. **Check connection status:**
+     - Look for "Server disconnected" message
+  
+  2. **Restart transfer:**
+     - Recipient should reject the incomplete transfer
+     - Sender resends the file
+     ```
+     /rejectfile 1
+     ```
+     Then sender uses `/sendfile` again.
+  
+  3. **Check disk space:**
+     ```bash
+     df -h ~/.secure_messenger_client/files/received/
+     ```
+</Accordion>
+
+<Accordion title="Cannot find received file">
+  **Symptoms:**
+  - Transfer completed successfully
+  - Cannot find the file
+  
+  **Solutions:**
+  
+  1. **Check received directory:**
+     ```bash
+     ls -la ~/.secure_messenger_client/files/received/
+     ```
+  
+  2. **Files are prefixed with sender name:**
+     ```bash
+     # If alice sent report.pdf, look for:
+     alice_report.pdf
+     ```
+  
+  3. **Check for filename conflicts:**
+     - Duplicates get numbered: `alice_report_1.pdf`, `alice_report_2.pdf`
+  
+  4. **On Windows:**
+     ```cmd
+     dir C:\Users\%USERNAME%\.secure_messenger_client\files\received\
+     ```
+</Accordion>
+
+## Installation issues
+
+<Accordion title="Error: Module not found">
+  **Symptoms:**
+  ```
+  ModuleNotFoundError: No module named 'Crypto'
+  ModuleNotFoundError: No module named 'prompt_toolkit'
+  ```
+  
+  **Cause:**
+  - Missing Python dependencies
+  
+  **Solution:**
+  
+  1. **Install requirements:**
+     ```bash
+     pip install -r requirements.txt
+     ```
+  
+  2. **Verify installation:**
+     ```bash
+     pip list | grep -E "pycryptodome|cryptography|prompt-toolkit"
+     ```
+     
+     Should show:
+     - `pycryptodome`
+     - `cryptography`
+     - `prompt_toolkit`
+  
+  3. **Use pip3 if needed:**
+     ```bash
+     pip3 install -r requirements.txt
+     ```
+</Accordion>
+
+<Accordion title="Error: Permission denied on directory creation">
+  **Symptoms:**
+  ```
+  PermissionError: [Errno 13] Permission denied: '~/.secure_messenger'
+  ```
+  
+  **Causes:**
+  - Insufficient permissions in home directory
+  - Directory owned by different user
+  
+  **Solutions:**
+  
+  1. **Check directory ownership:**
+     ```bash
+     ls -la ~ | grep secure_messenger
+     ```
+  
+  2. **Fix ownership:**
+     ```bash
+     sudo chown -R $USER:$USER ~/.secure_messenger
+     sudo chown -R $USER:$USER ~/.secure_messenger_client
+     ```
+  
+  3. **Fix permissions:**
+     ```bash
+     chmod 700 ~/.secure_messenger
+     chmod 700 ~/.secure_messenger_client
+     ```
+</Accordion>
+
+## Performance issues
+
+<Accordion title="Slow file transfers">
+  **Symptoms:**
+  - File transfer takes much longer than expected
+  - Progress updates very slowly
+  
+  **Causes:**
+  - Network latency
+  - High CPU usage (encryption overhead)
+  - Small chunks causing overhead
+  
+  **Solutions:**
+  
+  1. **Check network connection:**
+     ```bash
+     ping <server-ip>
+     # Check for high latency or packet loss
+     ```
+  
+  2. **Transfer speed expectations:**
+     - Each 64KB chunk requires:
+       - AES-256 encryption
+       - RSA-2048 key wrapping
+       - Network round-trip
+     - Large files (>10MB) will take time
+  
+  3. **Monitor server CPU:**
+     ```bash
+     top -p $(pgrep -f server.py)
+     ```
+     
+     Encryption is CPU-intensive.
+  
+  4. **Use local network when possible:**
+     - LAN transfers are much faster than internet transfers
+</Accordion>
+
+<Accordion title="High memory usage">
+  **Symptoms:**
+  - Server or client using excessive RAM
+  
+  **Causes:**
+  - Large number of connected clients
+  - Large file transfers
+  - Message history accumulation
+  
+  **Solutions:**
+  
+  1. **Client message history is limited:**
+     - Only last 100 messages kept in memory
+     - Older messages automatically discarded
+  
+  2. **Restart server periodically:**
+     - Clears session cache
+     - Resets connection state
+  
+  3. **Monitor memory:**
+     ```bash
+     # Linux
+     ps aux | grep -E "server.py|client.py"
+     
+     # Check RSS (resident set size) column
+     ```
+</Accordion>
+
+## Debugging tips
+
+### Enable verbose output
+
+Modify the code to add debug logging:
+
+```python
+# In server.py or client.py, add at the top:
+import logging
+logging.basicConfig(level=logging.DEBUG)
+```
+
+### Check security logs
+
+Server security events are logged:
+
+```bash
+tail -f ~/.secure_messenger/logs/security.log
+```
+
+Look for:
+- Failed authentication attempts
+- Account lockouts
+- Successful logins with IP addresses
+
+### Network debugging
+
+1. **Capture traffic with tcpdump:**
+   ```bash
+   sudo tcpdump -i any port 1315 -w capture.pcap
+   ```
+
+2. **Analyze with Wireshark:**
+   - Open `capture.pcap` in Wireshark
+   - Filter: `tcp.port == 1315`
+   - Note: You'll see encrypted TLS traffic
+
+### Test connectivity
+
+```bash
+# Test if server port is reachable
+telnet <server-ip> 1315
+
+# Or use netcat
+nc -zv <server-ip> 1315
+```
+
+## Getting help
+
+If you encounter issues not covered in this guide:
+
+1. **Check the logs:**
+   - Server: `~/.secure_messenger/logs/security.log`
+   - Look for error messages and timestamps
+
+2. **Verify versions:**
+   ```bash
+   python3 --version  # Should be 3.8+
+   pip list | grep -E "pycryptodome|cryptography|prompt-toolkit"
+   ```
+
+3. **Check system requirements:**
+   - Python 3.8 or higher
+   - OpenSSL 1.0.2 or higher
+   - Sufficient disk space for logs and files
+
+4. **Review source code:**
+   - Error messages often include file and line numbers
+   - Check the corresponding source code location
+
+<Note>
+Most issues are related to missing certificates or incorrect network configuration. Always verify TLS certificates are properly generated and distributed first.
+</Note>

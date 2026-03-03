@@ -1,0 +1,477 @@
+---
+title: File sharing
+description: Send and receive encrypted files securely through pyMessenger
+---
+
+PyMessenger supports end-to-end encrypted file transfers between users. Files are encrypted in chunks before transmission, ensuring the server never has access to plaintext content.
+
+## How file sharing works
+
+<Steps>
+  <Step title="Sender initiates transfer">
+    The sender uses `/sendfile` to offer a file to a recipient.
+  </Step>
+
+  <Step title="Recipient receives offer">
+    The recipient sees a file transfer notification with file details.
+  </Step>
+
+  <Step title="Recipient accepts or rejects">
+    Using `/acceptfile` or `/rejectfile`, the recipient controls the transfer.
+  </Step>
+
+  <Step title="File is transferred in chunks">
+    If accepted, the file is sent in 64 KB encrypted chunks with progress updates.
+  </Step>
+
+  <Step title="File is saved locally">
+    The complete file is saved to the recipient's received files directory.
+  </Step>
+</Steps>
+
+## Sending files
+
+### Basic file send
+
+Send a file to an online user:
+
+```bash
+> /sendfile alice ~/Documents/report.pdf
+
+→ Preparing to send file:
+  File: report.pdf
+  Size: 2.45 MB
+  To: alice
+
+Waiting for alice to accept...
+```
+
+### File path formats
+
+PyMessenger supports standard path formats:
+
+<CodeGroup>
+```bash Absolute path
+/sendfile bob /home/user/Documents/data.csv
+```
+
+```bash Home directory expansion
+/sendfile alice ~/Documents/report.pdf
+```
+
+```bash Relative path
+/sendfile charlie ./file.txt
+```
+</CodeGroup>
+
+<Note>
+  Paths with spaces should work without quotes, but if you encounter issues, try quoting the path:
+  ```
+  /sendfile alice "~/My Documents/file.txt"
+  ```
+</Note>
+
+### File size limits
+
+There are no hardcoded file size limits, but consider:
+
+- Larger files take longer to transfer
+- Memory usage increases with file size
+- Network reliability affects large transfers
+- The server must buffer chunks during routing
+
+<Warning>
+  For very large files (>100 MB), ensure you have a stable network connection. Transfer interruptions cannot currently be resumed.
+</Warning>
+
+### Transfer acceptance
+
+When the recipient accepts your file:
+
+```
+✓ alice accepted your file!
+→ Starting file transfer...
+
+→ Sending file in 39 chunks...
+  Progress: 25.6% (10/39)
+  Progress: 51.3% (20/39)
+  Progress: 76.9% (30/39)
+  Progress: 100.0% (39/39)
+✓ File sent successfully!
+```
+
+### Transfer rejection
+
+If the recipient rejects your file:
+
+```
+✗ alice rejected your file.
+```
+
+### Sent file storage
+
+A copy of each sent file is saved locally:
+
+```
+~/.secure_messenger_client/files/sent/<filename>
+```
+
+This provides a record of all files you've sent.
+
+## Receiving files
+
+### File offer notification
+
+When someone sends you a file, you'll see:
+
+```
+════════════════════════════════════════════════════════
+  📁 FILE TRANSFER REQUEST
+════════════════════════════════════════════════════════
+  bob wants to send you a file:
+
+  Filename: quarterly_report.pdf
+  Size: 3.87 MB
+
+  Type /acceptfile 1 to accept
+  Type /rejectfile 1 to reject
+════════════════════════════════════════════════════════
+```
+
+### Viewing pending offers
+
+See all pending file offers:
+
+```bash
+> /acceptfile
+
+Pending file offers:
+  1. report.pdf (2.45 MB) from alice
+     File ID: xK9mP2nQ8vL4jR1s
+  2. image.png (0.87 MB) from bob
+     File ID: aB3dE6fG9hI2jK5l
+  3. data.csv (12.34 MB) from charlie
+     File ID: pQ7rS9tU2vW5xY8z
+
+Usage: /acceptfile <number>
+```
+
+### Accepting files
+
+Accept a file by its number:
+
+```bash
+> /acceptfile 1
+✓ Accepting file: report.pdf
+  Waiting for transfer to begin...
+
+  Receiving: 10.3% (4/39)
+  Receiving: 25.6% (10/39)
+  Receiving: 51.3% (20/39)
+  Receiving: 76.9% (30/39)
+  Receiving: 100.0% (39/39)
+
+✓ File received successfully!
+  From: alice
+  Saved as: alice_report.pdf
+  Location: ~/.secure_messenger_client/files/received/alice_report.pdf
+  Size: 2.45 MB
+```
+
+### Rejecting files
+
+Reject a file you don't want:
+
+```bash
+> /rejectfile 2
+✗ Rejected file: image.png
+```
+
+The sender is notified of the rejection.
+
+### Received file storage
+
+Received files are saved to:
+
+```
+~/.secure_messenger_client/files/received/<sender>_<filename>
+```
+
+**File naming:**
+- Files are prefixed with the sender's username
+- Original filename is preserved
+- Duplicate filenames get a counter: `alice_report_1.pdf`, `alice_report_2.pdf`
+
+**Example structure:**
+```
+~/.secure_messenger_client/files/received/
+├── alice_report.pdf
+├── alice_presentation.pptx
+├── bob_data.csv
+├── bob_data_1.csv  # Duplicate handled
+└── charlie_image.png
+```
+
+## File encryption
+
+### Encryption process
+
+Each file chunk is encrypted individually:
+
+<Steps>
+  <Step title="File is split into chunks">
+    The file is divided into 64 KB (65,536 byte) chunks.
+  </Step>
+
+  <Step title="Each chunk is encrypted">
+    For each chunk:
+    1. Generate a random 256-bit AES key
+    2. Encrypt chunk with AES-GCM
+    3. Generate authentication tag
+    4. Encrypt AES key with recipient's RSA public key (2048-bit)
+  </Step>
+
+  <Step title="Chunks are transmitted">
+    Each encrypted chunk is sent separately with:
+    - Encrypted chunk data
+    - Nonce (for AES-GCM)
+    - Authentication tag
+    - Encrypted AES key
+    - Chunk number and total chunks
+  </Step>
+
+  <Step title="Recipient decrypts chunks">
+    The recipient:
+    1. Decrypts the AES key using their RSA private key
+    2. Decrypts the chunk using the AES key
+    3. Verifies the authentication tag
+    4. Stores the decrypted chunk
+  </Step>
+
+  <Step title="File is reassembled">
+    After all chunks are received, they're assembled in order and saved to disk.
+  </Step>
+</Steps>
+
+### Security guarantees
+
+**End-to-end encryption:**
+- Server only sees encrypted chunks
+- Each chunk has a unique encryption key
+- Authentication tags prevent tampering
+
+**Integrity verification:**
+- GCM mode provides authenticated encryption
+- Any modification is detected during decryption
+- Corrupted chunks cause decryption to fail
+
+**Forward secrecy (per-file):**
+- Each file uses independent encryption keys
+- Compromising one file doesn't affect others
+
+<Warning>
+  If chunk decryption fails, you'll see an error:
+  ```
+  ✗ Error receiving file chunk: MAC verification failed
+  ```
+  
+  This could indicate:
+  - Data corruption during transmission
+  - Man-in-the-middle attack
+  - Network issues
+  
+  The file transfer will be incomplete and unusable.
+</Warning>
+
+## File transfer protocol
+
+### Message flow
+
+The file transfer protocol uses these message types:
+
+1. **file_offer** (sender → server → recipient)
+   ```json
+   {
+     "type": "file_offer",
+     "target": "alice",
+     "filename": "report.pdf",
+     "filesize": 2456789,
+     "file_id": "xK9mP2nQ8vL4jR1s"
+   }
+   ```
+
+2. **file_response** (recipient → server → sender)
+   ```json
+   {
+     "type": "file_response",
+     "file_id": "xK9mP2nQ8vL4jR1s",
+     "accepted": true,
+     "sender": "bob"
+   }
+   ```
+
+3. **file_transfer** (sender → server → recipient, repeated for each chunk)
+   ```json
+   {
+     "type": "file_transfer",
+     "target": "alice",
+     "file_id": "xK9mP2nQ8vL4jR1s",
+     "chunk_num": 1,
+     "total_chunks": 39,
+     "encrypted_chunk": "<base64 ciphertext>",
+     "nonce": "<base64 nonce>",
+     "tag": "<base64 auth tag>",
+     "encrypted_key": "<base64 RSA-encrypted AES key>"
+   }
+   ```
+
+### Chunk size
+
+Chunks are fixed at 64 KB (65,536 bytes) defined in `client.py:1012`:
+
+```python
+CHUNK_SIZE = 64 * 1024  # 64 KB chunks
+```
+
+This size balances:
+- Memory usage
+- Network efficiency
+- Progress update granularity
+- Error recovery (if implemented)
+
+### Progress updates
+
+Progress is displayed every 10 chunks or on completion:
+
+```python
+if chunk_num % 10 == 0 or chunk_num == total_chunks:
+    progress = (chunk_num / total_chunks) * 100
+    print(f"Progress: {progress:.1f}% ({chunk_num}/{total_chunks})")
+```
+
+For a 2.45 MB file (39 chunks), you'll see updates at chunks: 10, 20, 30, 39.
+
+## Troubleshooting
+
+### File not found
+
+```
+> /sendfile alice missing.txt
+✗ File not found: missing.txt
+```
+
+**Solution:** Verify the file path is correct and the file exists.
+
+### Permission denied
+
+```
+✗ File send error: [Errno 13] Permission denied: '/root/secret.txt'
+```
+
+**Solution:** Ensure you have read permissions for the file.
+
+### Recipient offline
+
+```
+> /sendfile charlie data.csv
+⚠ User 'charlie' is not online.
+```
+
+**Solution:** Wait for the user to come online, or use another file sharing method.
+
+### Transfer interrupted
+
+If the sender or recipient disconnects during transfer:
+
+```
+✗ Recipient went offline
+```
+
+or
+
+```
+✗ Error receiving file chunk: Connection reset
+```
+
+**Solution:** The transfer cannot be resumed. The sender must re-send the file after both users are online.
+
+### Disk space issues
+
+```
+✗ Error finalizing file transfer: [Errno 28] No space left on device
+```
+
+**Solution:** Free up disk space in `~/.secure_messenger_client/files/received/` and ask the sender to resend.
+
+### Decryption failures
+
+```
+✗ Error receiving file chunk: MAC verification failed
+```
+
+**Causes:**
+- Network corruption
+- Man-in-the-middle attack
+- Software bug
+
+**Solution:** 
+1. Check network stability
+2. Verify both users are running the same client version
+3. If it persists, report as a security incident
+
+## Best practices
+
+### Verify file integrity
+
+After receiving a file, verify it's what you expected:
+
+```bash
+# Calculate checksum
+sha256sum ~/.secure_messenger_client/files/received/alice_report.pdf
+```
+
+Share the checksum with the sender through another channel to verify integrity.
+
+### Scan received files
+
+Always scan received files for malware:
+
+```bash
+clamscan ~/.secure_messenger_client/files/received/alice_report.pdf
+```
+
+<Warning>
+  PyMessenger encrypts files but doesn't scan for malware. Treat received files with the same caution as email attachments.
+</Warning>
+
+### Clean up old files
+
+Periodically remove old sent/received files:
+
+```bash
+# View storage usage
+du -sh ~/.secure_messenger_client/files/
+
+# Remove old files
+rm ~/.secure_messenger_client/files/received/alice_old_report.pdf
+```
+
+### Sensitive file handling
+
+For highly sensitive files:
+
+1. Verify recipient identity through out-of-band means
+2. Use `/room` to establish a private room first
+3. Announce the file transfer in the room
+4. Send the file
+5. Confirm receipt and integrity with a checksum
+6. Delete the file after confirmation if no longer needed
+
+### Large file considerations
+
+For files over 50 MB:
+
+- Compress the file first: `tar -czf data.tar.gz data/`
+- Ensure stable network connection
+- Warn the recipient about the large size
+- Consider splitting very large files (>500 MB) manually

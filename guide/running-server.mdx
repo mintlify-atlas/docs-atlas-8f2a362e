@@ -1,0 +1,191 @@
+---
+title: Running the server
+description: Learn how to start and configure the pyMessenger server for secure messaging
+---
+
+The pyMessenger server handles authentication, message routing, and file transfer coordination between clients. It uses SSL/TLS encryption for all connections and supports multiple simultaneous users.
+
+## Starting the server
+
+<Steps>
+  <Step title="Ensure SSL certificates exist">
+    The server requires SSL/TLS certificates for secure connections. If certificates don't exist, they will be automatically generated on first run:
+
+    ```bash
+    python server.py
+    ```
+
+    Certificates are stored in `~/.secure_messenger/certs/`:
+    - `server.crt` - Server certificate
+    - `server.key` - Private key
+  </Step>
+
+  <Step title="Start the server">
+    Run the server with default settings:
+
+    ```bash
+    python server.py
+    ```
+
+    You should see output confirming the server has started:
+
+    ```
+    [+] SSL/TLS encryption enabled
+    [i] Using certificate: /home/user/.secure_messenger/certs/server.crt
+    [+] Server started on 0.0.0.0, port 1315
+    [+] SSL/TLS encryption: ENABLED
+    [i] Authentication system ready
+    [i] Press Ctrl+C to stop the server
+    ```
+  </Step>
+
+  <Step title="Verify connections">
+    When clients connect, you'll see connection logs:
+
+    ```
+    [+] Secure connection from ('127.0.0.1', 54321)
+    [+] New user registered: alice
+    [+] alice ready for messaging
+    ```
+  </Step>
+</Steps>
+
+## Server configuration
+
+The server initializes with the following default settings (defined in `server.py:20-21`):
+
+<ParamField path="host" type="string" default="0.0.0.0">
+  The network interface to bind to. `0.0.0.0` listens on all available interfaces.
+</ParamField>
+
+<ParamField path="port" type="int" default="1315">
+  The TCP port number for incoming connections.
+</ParamField>
+
+To modify these values, edit the `Server` initialization in `server.py`:
+
+```python
+if __name__ == "__main__":
+    try:
+        server = Server(host="0.0.0.0", port=1315)
+        server.start()
+```
+
+## Security features
+
+The server implements multiple security layers:
+
+### SSL/TLS encryption
+
+All client connections are encrypted using TLS 1.2 or higher with strong cipher suites:
+
+```
+ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20:!aNULL:!MD5:!DSS
+```
+
+### Session management
+
+The server maintains secure sessions with:
+- Cryptographically secure session tokens (32 bytes)
+- Session timeout: 24 hours (86400 seconds)
+- Automatic session cleanup on expiration
+
+### Challenge-response authentication
+
+For login operations, the server uses challenge-response authentication instead of transmitting passwords:
+
+1. Client requests login with username
+2. Server generates unique nonce and sends with user's salt
+3. Client computes HMAC response using password-derived key
+4. Server verifies response and issues session token
+
+<Note>
+  The server never stores or transmits plain-text passwords. Only password hashes derived with PBKDF2 (100,000 iterations) are stored.
+</Note>
+
+## Server operations
+
+### User connections
+
+When a user connects and authenticates:
+
+```
+[+] Secure connection from ('192.168.1.100', 45678)
+[+] User logged in (challenge-response): bob from 192.168.1.100
+[+] bob ready for messaging
+```
+
+### Message routing
+
+The server relays encrypted messages between users:
+- Broadcasts to all connected clients
+- Private messages to specific recipients
+- Room-based private conversations
+
+<Note>
+  Messages are end-to-end encrypted. The server only routes ciphertext and cannot read message content.
+</Note>
+
+### File transfer coordination
+
+The server coordinates file transfers:
+
+```
+[i] File offer from alice to bob: report.pdf (2456789 bytes)
+[✓] File offer relayed to bob
+[→] Relaying file chunk 10/45 from alice to bob
+```
+
+## Stopping the server
+
+To gracefully shutdown the server:
+
+1. Press `Ctrl+C` in the terminal
+2. The server will:
+   - Close all client connections
+   - Release the network port
+   - Exit cleanly
+
+```
+[!] Server shutdown requested
+[i] Server stopped
+```
+
+## Troubleshooting
+
+### SSL certificate errors
+
+If the server fails to load certificates:
+
+```
+[x] SSL setup error: [Errno 2] No such file or directory
+[!] Server will run without SSL encryption
+```
+
+**Solution:** Run `generate_certificates.py` to create new certificates:
+
+```bash
+python generate_certificates.py
+```
+
+### Port already in use
+
+If port 1315 is already bound:
+
+```
+[x] Server error: [Errno 98] Address already in use
+```
+
+**Solution:** Either stop the existing process using the port, or change the server port number.
+
+### Connection issues
+
+If clients cannot connect:
+
+- Verify firewall rules allow incoming connections on port 1315
+- Check that the server is listening on the correct interface
+- Ensure SSL certificates are properly generated
+
+<Warning>
+  Do not run the server without SSL/TLS encryption in production environments. All connections should be encrypted.
+</Warning>

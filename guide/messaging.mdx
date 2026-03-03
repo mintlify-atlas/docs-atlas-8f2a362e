@@ -1,0 +1,346 @@
+---
+title: Messaging
+description: Send encrypted messages in broadcast and private room modes
+---
+
+PyMessenger supports two messaging modes: broadcast mode for group conversations and private rooms for one-on-one chats. All messages are end-to-end encrypted using AES-256.
+
+## Chat interface
+
+After authentication, you'll see the main chat interface:
+
+```
+======================================================================
+                            pyMESSENGER                              
+======================================================================
+  Logged in as: alice
+  Mode: [BROADCAST MODE]
+======================================================================
+
+Commands:
+  /room <user>        Enter private room with user
+  /leave              Leave private room (return to broadcast)
+  /msg <user> <text>  Send single private message
+  /sendfile <user> <path>  Send file to user
+  /acceptfile [#]     Accept pending file transfer
+  /rejectfile [#]     Reject pending file transfer
+  /history [count]    View message history
+  /users              List online users
+  /clear              Clear screen
+  /help               Show help
+  /exit               Exit chat
+
+──────────────────────────────────────────────────────────────────────
+
+>
+```
+
+## Broadcast mode
+
+Broadcast mode is the default messaging mode. Messages are sent to all online users.
+
+### Sending broadcast messages
+
+Simply type your message and press Enter:
+
+```
+> Hello everyone!
+[14:23] [You] Hello everyone!
+```
+
+All connected users will receive your message:
+
+```
+[14:23] [alice] Hello everyone!
+```
+
+### Message encryption
+
+Each broadcast message is encrypted individually for each recipient:
+
+1. Client generates a random AES-256 key
+2. Message is encrypted with AES-GCM mode
+3. AES key is encrypted with each recipient's RSA public key
+4. Server routes encrypted message to all recipients
+5. Each recipient decrypts the AES key with their private key
+6. Message is decrypted and displayed
+
+<Note>
+  The server cannot read message content. It only routes encrypted ciphertext between users.
+</Note>
+
+### Message display format
+
+**Your messages:**
+```
+[14:23] [You] Hello everyone!
+```
+
+**Incoming messages:**
+```
+[14:23] [bob] Hi alice!
+```
+
+**System messages:**
+```
+[i] charlie joined
+```
+
+## Private rooms
+
+Private rooms provide one-on-one conversations. All messages in a private room are sent only to the other user.
+
+### Creating a private room
+
+<Steps>
+  <Step title="Send room invitation">
+    Use the `/room` command with the username:
+
+    ```
+    > /room bob
+    → Sending room invitation to bob...
+      Waiting for bob to accept...
+    ```
+  </Step>
+
+  <Step title="Other user receives invitation">
+    The recipient sees an invitation notification:
+
+    ```
+    ════════════════════════════════════════════════════════════
+      -> PRIVATE ROOM INVITATION
+    ════════════════════════════════════════════════════════════
+      alice wants to enter a private room with you.
+
+      Type /accept to accept and enter private room
+      Type /decline to decline invitation
+    ════════════════════════════════════════════════════════════
+    ```
+  </Step>
+
+  <Step title="Invitation accepted">
+    When the invitation is accepted, both users enter the private room:
+
+    ```
+    ✓ Private room created with bob!
+      All messages will now be sent only to bob.
+      Type /leave to return to broadcast mode.
+    ```
+
+    The interface updates to show private room mode:
+
+    ```
+    ======================================================================
+                        PRIVATE CHAT with bob                           
+    ======================================================================
+      Logged in as: alice
+      Mode: [PRIVATE ROOM: bob]
+    ======================================================================
+    ```
+  </Step>
+</Steps>
+
+### Messaging in private rooms
+
+All messages sent in a private room go only to the other user:
+
+```
+to @bob > How are you?
+[14:25] [To bob] How are you?
+```
+
+The recipient sees:
+
+```
+[14:25] [alice]-(priv) How are you?
+```
+
+The `(priv)` indicator shows it's a private message.
+
+### Leaving a private room
+
+Return to broadcast mode with `/leave`:
+
+```
+to @bob > /leave
+✓ Left private room with bob
+  Returned to broadcast mode.
+```
+
+### Declining room invitations
+
+To decline an invitation:
+
+```
+> /decline
+✗ Declined room invitation from alice.
+```
+
+The sender receives notification:
+
+```
+✗ bob declined your room invitation.
+```
+
+## One-off private messages
+
+Send a single private message without entering a room using `/msg`:
+
+```
+> /msg bob Hey, check this out!
+[14:30] [To bob]-(priv) Hey, check this out!
+```
+
+Bob receives:
+
+```
+[14:30] [alice]-(priv) Hey, check this out!
+```
+
+<Note>
+  Using `/msg` doesn't change your current mode. You remain in broadcast or your current room.
+</Note>
+
+## Message features
+
+### Timestamps
+
+All messages include timestamps in HH:MM format:
+
+```
+[14:23] [alice] Message sent at 2:23 PM
+[09:45] [bob] Message sent at 9:45 AM
+```
+
+### User mentions
+
+Mention other users with the `@` symbol:
+
+```
+> Hey @bob, what do you think?
+[14:32] [You] Hey @bob, what do you think?
+```
+
+When someone mentions you, the message is highlighted:
+
+```
+[14:33] [charlie](@mentioned you) I agree with @alice on this
+```
+
+Your username appears in yellow and bold when you're mentioned.
+
+### Message history
+
+View recent messages with `/history`:
+
+```
+> /history
+
+Message History (last 20 messages):
+────────────────────────────────────────────────────────
+[14:20] [bob] Hello
+[14:21] [You] Hi bob!
+[14:22] [charlie] Hey everyone
+[14:23] [You] Welcome charlie
+────────────────────────────────────────────────────────
+```
+
+Specify the number of messages to view:
+
+```
+> /history 50
+```
+
+<Note>
+  Message history is stored locally in memory (max 100 messages). It's cleared when you exit the client.
+</Note>
+
+## Viewing online users
+
+List all connected users with `/users`:
+
+```
+> /users
+
+Online users:
+  1. bob
+  2. charlie
+  3. david
+```
+
+If you're in a private room, the room partner is highlighted:
+
+```
+Online users:
+  1. bob (in room)
+  2. charlie
+```
+
+## Message encryption details
+
+### Encryption scheme
+
+PyMessenger uses hybrid encryption:
+
+- **Symmetric encryption:** AES-256 in GCM mode
+- **Key exchange:** RSA-2048 with PKCS1_OAEP padding
+- **Authentication:** GCM authentication tags verify message integrity
+
+### Encryption process
+
+For each message:
+
+1. Generate random 256-bit AES key
+2. Generate random nonce for GCM mode
+3. Encrypt message plaintext with AES-GCM
+4. Compute authentication tag
+5. Encrypt AES key with each recipient's RSA public key
+6. Transmit: ciphertext + nonce + tag + encrypted keys
+
+### Decryption process
+
+To read a message:
+
+1. Decrypt AES key using your RSA private key
+2. Initialize AES cipher with key and nonce
+3. Decrypt ciphertext and verify authentication tag
+4. Display plaintext message
+
+<Warning>
+  If decryption fails (wrong key, corrupted data, or modified ciphertext), you'll see:
+
+  ```
+  ⚠ Decrypt failed from alice
+  ```
+
+  This could indicate a man-in-the-middle attack or data corruption.
+</Warning>
+
+## Best practices
+
+### Use private rooms for sensitive conversations
+
+For confidential one-on-one discussions, use private rooms instead of broadcast mode:
+
+```
+/room alice
+```
+
+### Verify user identity
+
+PyMessenger doesn't currently implement identity verification. For sensitive communications, verify the other user's identity through an out-of-band channel.
+
+### Monitor for unusual behavior
+
+Watch for:
+- Unexpected decryption failures
+- Users you don't recognize joining
+- Messages claiming to be from offline users
+
+### Clear screen regularly
+
+Use `/clear` to refresh the interface and prevent shoulder surfing:
+
+```
+> /clear
+```

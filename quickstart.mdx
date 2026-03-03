@@ -1,80 +1,433 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Get up and running with pyMessenger in minutes
 ---
 
-## Get started in three steps
+## Start the server
 
-Get your documentation site running locally and make your first customization.
+First, start the pyMessenger server in a terminal window:
 
-### Step 1: Set up your local environment
+```bash
+python3 server.py
+```
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
+The server starts on port 1315 by default. You should see:
+
+```
+[+] SSL/TLS encryption enabled
+[i] Using certificate: /home/user/.secure_messenger/certs/server.crt
+[+] Server listening on 0.0.0.0:1315
+```
+
+### Server options
+
+You can customize the server address and port:
+
+<CodeGroup>
+
+```bash Default
+python3 server.py
+```
+
+```bash Custom port
+python3 server.py --port 8080
+```
+
+```bash Custom host and port
+python3 server.py --host 192.168.1.100 --port 8080
+```
+
+</CodeGroup>
+
+<Note>
+  Keep the server running in this terminal. Open new terminals for client connections.
+</Note>
+
+## Start your first client
+
+In a new terminal window, start the client:
+
+```bash
+python3 client.py
+```
+
+### Client options
+
+Connect to a remote server or custom port:
+
+<CodeGroup>
+
+```bash Localhost (default)
+python3 client.py
+```
+
+```bash Remote server
+python3 client.py --host 192.168.1.100
+```
+
+```bash Custom port
+python3 client.py --host 192.168.1.100 --port 8080
+```
+
+</CodeGroup>
+
+## Create your account
+
+On first run, you'll see the login screen. Create a new account:
+
+<Steps>
+  <Step title="Select register option">
+    Enter `1` to register a new account.
+  </Step>
+  <Step title="Enter username">
+    Choose a unique username (minimum 3 characters).
+  </Step>
+  <Step title="Set password">
+    Create a strong password (minimum 6 characters).
     
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
+    <Warning>
+      Your password encrypts your private key locally. Choose a strong password and don't forget it - there is no recovery mechanism.
+    </Warning>
+  </Step>
+  <Step title="Key generation">
+    The client automatically generates your RSA-2048 keypair and encrypts it with your password using PBKDF2-SHA256.
     
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+    Your private key is saved to: `~/.secure_messenger_client/keys/{username}_private.key`
+  </Step>
+</Steps>
 
-### Step 2: Deploy your changes
+The registration process executes this code from `client.py:457-485`:
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
+```python client.py
+# Generate RSA keypair
+print_formatted_text(ANSI(f"{CYAN}[i]{RESET} Generating encryption keys..."))
+rsa_key = RSA.generate(2048)
+pubkey_bytes = rsa_key.publickey().export_key()
+
+# Save encrypted private key
+self.key_manager.save_private_key(
+    username, 
+    rsa_key.export_key(), 
+    password
+)
+
+# Register with server
+send_json(self.client_socket, {
+    'type': 'auth_request',
+    'auth_type': 'register',
+    'username': username,
+    'password': password,
+    'pubkey': base64.b64encode(pubkey_bytes).decode('utf-8')
+})
+```
+
+## Send your first message
+
+Once logged in, you're in broadcast mode. Any message you send goes to all online users:
+
+```
+You: Hello, world!
+```
+
+Press Enter to send. All connected users will receive your encrypted message.
+
+### Message encryption
+
+Each message is encrypted using the hybrid encryption scheme:
+
+1. Generate random AES-256 key
+2. Encrypt message with AES-256-EAX
+3. Encrypt AES key for each recipient with their RSA-2048 public key
+4. Send encrypted envelope to server for routing
+
+From `client.py:1156-1188`:
+
+```python client.py
+# Generate random AES key
+aes_key = get_random_bytes(32)
+
+# Encrypt message content
+cipher = AES.new(aes_key, AES.MODE_EAX)
+nonce = cipher.nonce
+ciphertext, tag = cipher.encrypt_and_digest(plaintext.encode('utf-8'))
+
+# Encrypt AES key for each recipient
+encrypted_keys = {}
+for target_user in targets:
+    recipient_pubkey = RSA.import_key(self.peer_keys[target_user])
+    cipher_rsa = PKCS1_OAEP.new(recipient_pubkey)
+    encrypted_aes_key = cipher_rsa.encrypt(aes_key)
+    encrypted_keys[target_user] = base64.b64encode(encrypted_aes_key).decode('utf-8')
+
+# Send encrypted message
+send_json(self.client_socket, {
+    'type': 'encrypted_send',
+    'targets': targets,
+    'ciphertext': base64.b64encode(ciphertext).decode('utf-8'),
+    'nonce': base64.b64encode(nonce).decode('utf-8'),
+    'tag': base64.b64encode(tag).decode('utf-8'),
+    'keys': encrypted_keys
+})
+```
+
+## Use private messaging
+
+### Enter a private room
+
+Create a private chat room with another user:
+
+```
+/room alice
+```
+
+You'll see:
+
+```
+✓ Entering private room with: alice
+════════════════════════════════════════
+PRIVATE ROOM: You ⇄ alice
+════════════════════════════════════════
+```
+
+All messages now go only to alice with the same end-to-end encryption.
+
+### Leave the room
+
+Return to broadcast mode:
+
+```
+/leave
+```
+
+### Send a single private message
+
+Send a one-off message without entering a room:
+
+```
+/msg bob Hey, check out this file I'm sending!
+```
+
+## Share files securely
+
+### Send a file
+
+Send an encrypted file to another user:
+
+```
+/sendfile alice ~/Documents/report.pdf
+```
+
+The file is encrypted in 64KB chunks, each with its own AES-256 key. Progress is shown in real-time:
+
+```
+✓ File offer sent to alice
+  Waiting for acceptance...
+
+✓ alice accepted the file
+[████████████████████████] 100% (2.5 MB / 2.5 MB)
+✓ File sent successfully
+```
+
+### Receive a file
+
+When someone sends you a file, you'll see:
+
+```
+📎 File offer from bob: presentation.pdf (1.2 MB)
+   Use '/acceptfile' to accept or '/rejectfile' to reject
+```
+
+Accept the file:
+
+```
+/acceptfile
+```
+
+Or if you have multiple offers:
+
+```
+Pending file offers:
+  1. presentation.pdf (1.2 MB) from bob
+  2. spreadsheet.xlsx (0.8 MB) from alice
+
+/acceptfile 1
+```
+
+Accepted files are saved to: `~/.secure_messenger_client/files/received/`
+
+<Note>
+  Files are prefixed with the sender's username to prevent conflicts: `bob_presentation.pdf`
+</Note>
+
+## Essential commands
+
+### List online users
+
+```
+/users
+```
+
+Shows all connected users:
+
+```
+Online users:
+  1. alice
+  2. bob (in room)
+  3. charlie
+```
+
+### View message history
+
+See your last 20 messages:
+
+```
+/history
+```
+
+Or specify a count (max 100):
+
+```
+/history 50
+```
+
+### Clear the screen
+
+Refresh the interface:
+
+```
+/clear
+```
+
+### Get help
+
+View all available commands:
+
+```
+/help
+```
+
+### Exit the application
+
+```
+/exit
+```
+
+## Common workflows
+
+### Group conversation
+
+<Steps>
+  <Step title="Multiple users connect">
+    Have several users connect to the same server.
+  </Step>
+  <Step title="Send broadcast messages">
+    Messages in broadcast mode (default) reach all online users.
+  </Step>
+  <Step title="Use mentions">
+    Mention specific users with `@username` to get their attention.
     
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    ```
+    @alice @bob What do you think about the proposal?
+    ```
+  </Step>
+</Steps>
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+### Private collaboration
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+<Steps>
+  <Step title="Enter private room">
+    ```
+    /room alice
+    ```
+  </Step>
+  <Step title="Discuss privately">
+    All messages now only visible to you and alice.
+  </Step>
+  <Step title="Share a file">
+    ```
+    /sendfile alice ~/project/design.pdf
+    ```
+  </Step>
+  <Step title="Return to group">
+    ```
+    /leave
+    ```
+  </Step>
+</Steps>
 
-### Step 3: Go live
+### File exchange workflow
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+<Steps>
+  <Step title="Sender initiates transfer">
+    ```
+    /sendfile bob document.pdf
+    ```
+  </Step>
+  <Step title="Recipient gets notification">
+    Recipient sees file offer with size and sender information.
+  </Step>
+  <Step title="Recipient accepts">
+    ```
+    /acceptfile
+    ```
+  </Step>
+  <Step title="Encrypted transfer">
+    File is transferred in encrypted chunks with real-time progress.
+  </Step>
+  <Step title="File saved">
+    Received file saved to `~/.secure_messenger_client/files/received/bob_document.pdf`
+  </Step>
+</Steps>
+
+## Security considerations
+
+### Challenge-response authentication
+
+After initial registration, your password is never sent over the network. The login flow uses HMAC-based challenge-response:
+
+From `client.py:545-566`:
+
+```python client.py
+# Receive challenge
+challenge_msg = recv_json(self.client_socket)
+nonce_b64 = challenge_msg.get('nonce')
+salt_b64 = challenge_msg.get('salt')
+
+nonce = base64.b64decode(nonce_b64)
+salt = base64.b64decode(salt_b64)
+
+# Derive password key
+password_key = PBKDF2(
+    password.encode('utf-8'),
+    salt,
+    32,
+    count=100000,
+    hmac_hash_module=SHA256
+)
+
+# Compute HMAC response
+import hmac
+response = hmac.new(password_key, nonce, 'sha256').digest()
+```
+
+### Rate limiting
+
+<Warning>
+  After 5 failed login attempts, your account is locked for 15 minutes to prevent brute force attacks.
+</Warning>
+
+### Session management
+
+Authenticated sessions are valid for 24 hours. After this period, you'll need to log in again.
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
+Now that you're up and running with pyMessenger:
 
-<CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
-</CardGroup>
+- Explore the [security architecture](/concepts/security-architecture) to understand the encryption in depth
+- Review [available commands](/guide/commands) for advanced features
+- Set up pyMessenger on a remote server for distributed messaging
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+  For production deployments, consider using certificates from a trusted Certificate Authority instead of self-signed certificates.
 </Note>

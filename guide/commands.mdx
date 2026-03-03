@@ -1,0 +1,549 @@
+---
+title: Commands
+description: Complete reference for all pyMessenger client commands
+---
+
+PyMessenger provides a set of commands for managing conversations, file transfers, and client settings. All commands start with a forward slash `/`.
+
+## Room management
+
+### /room
+
+Enter a private room with another user.
+
+**Syntax:**
+```
+/room <username>
+```
+
+**Example:**
+```
+> /room alice
+→ Sending room invitation to alice...
+  Waiting for alice to accept...
+```
+
+**Behavior:**
+- Sends a private room invitation to the specified user
+- User must be online
+- Waits for the user to `/accept` or `/decline`
+- If accepted, switches to private room mode
+- Cannot create a room with yourself
+
+**Error cases:**
+
+<CodeGroup>
+```bash User offline
+> /room charlie
+⚠ User 'charlie' is not online.
+```
+
+```bash Self-room attempt
+> /room alice
+⚠ You cannot create a room with yourself.
+```
+</CodeGroup>
+
+### /accept
+
+Accept a pending private room invitation.
+
+**Syntax:**
+```
+/accept
+```
+
+**Example:**
+```
+> /accept
+✓ Accepting room invitation from bob...
+
+✓ Private room created with bob!
+  All messages will now be sent only to bob.
+  Type /leave to return to broadcast mode.
+```
+
+**Behavior:**
+- Accepts the most recent room invitation
+- Both users enter private room mode
+- Interface switches to private room theme (magenta/red)
+- All subsequent messages go only to the room partner
+
+**Error case:**
+```bash No pending invitation
+> /accept
+⚠ No pending room invitation.
+```
+
+### /decline
+
+Decline a pending private room invitation.
+
+**Syntax:**
+```
+/decline
+```
+
+**Example:**
+```
+> /decline
+✗ Declined room invitation from alice.
+```
+
+**Behavior:**
+- Rejects the pending room invitation
+- Sender is notified of the rejection
+- You remain in your current mode (broadcast or current room)
+
+**Error case:**
+```bash No pending invitation
+> /decline
+⚠ No pending room invitation.
+```
+
+### /leave
+
+Leave the current private room and return to broadcast mode.
+
+**Syntax:**
+```
+/leave
+```
+
+**Example:**
+```
+to @bob > /leave
+✓ Left private room with bob
+  Returned to broadcast mode.
+```
+
+**Behavior:**
+- Exits the current private room
+- Returns to broadcast mode
+- Interface switches back to cyan theme
+- Subsequent messages are broadcast to all users
+
+**Error case:**
+```bash Not in a room
+> /leave
+⚠ You are not in a private room.
+```
+
+## Messaging
+
+### /msg
+
+Send a single private message without entering a room.
+
+**Syntax:**
+```
+/msg <username> <message>
+```
+
+**Example:**
+```
+> /msg alice Hey, can you check the report?
+[14:30] [To alice]-(priv) Hey, can you check the report?
+```
+
+**Behavior:**
+- Sends one encrypted message to the specified user
+- Does not change your current mode
+- Recipient sees it marked as `(priv)` for private
+- User must be online
+
+**Error case:**
+```bash User offline
+> /msg charlie Hello
+⚠ User 'charlie' not online.
+```
+
+<Note>
+  `/msg` is useful for quick private messages without the overhead of creating and leaving a room.
+</Note>
+
+## File transfer
+
+### /sendfile
+
+Send an encrypted file to another user.
+
+**Syntax:**
+```
+/sendfile <username> <filepath>
+```
+
+**Example:**
+```
+> /sendfile bob ~/Documents/report.pdf
+
+→ Preparing to send file:
+  File: report.pdf
+  Size: 2.45 MB
+  To: bob
+
+Waiting for bob to accept...
+```
+
+**Behavior:**
+- Validates file exists and is readable
+- Sends file offer to recipient
+- Waits for recipient to accept or reject
+- If accepted, sends file in encrypted chunks (64 KB each)
+- Shows progress during transfer
+- Saves a copy to `~/.secure_messenger_client/files/sent/`
+
+**Parameters:**
+- `<username>`: Recipient's username (must be online)
+- `<filepath>`: Path to file (supports `~` expansion)
+
+**Success output:**
+```
+✓ bob accepted your file!
+→ Starting file transfer...
+
+→ Sending file in 39 chunks...
+  Progress: 25.6% (10/39)
+  Progress: 51.3% (20/39)
+  Progress: 76.9% (30/39)
+  Progress: 100.0% (39/39)
+✓ File sent successfully!
+```
+
+**Error cases:**
+
+<CodeGroup>
+```bash User offline
+> /sendfile charlie data.csv
+⚠ User 'charlie' is not online.
+```
+
+```bash File not found
+> /sendfile bob missing.txt
+✗ File not found: missing.txt
+```
+
+```bash Not a file
+> /sendfile bob ~/Documents/
+✗ Not a file: ~/Documents/
+```
+
+```bash User rejected
+✗ bob rejected your file.
+```
+</CodeGroup>
+
+### /acceptfile
+
+Accept a pending file transfer.
+
+**Syntax:**
+```
+/acceptfile [number]
+```
+
+**Example:**
+
+**List pending offers:**
+```
+> /acceptfile
+
+Pending file offers:
+  1. report.pdf (2.45 MB) from alice
+     File ID: xK9mP2nQ8vL4jR1s
+  2. image.png (0.87 MB) from bob
+     File ID: aB3dE6fG9hI2jK5l
+
+Usage: /acceptfile <number>
+```
+
+**Accept specific file:**
+```
+> /acceptfile 1
+✓ Accepting file: report.pdf
+  Waiting for transfer to begin...
+
+  Receiving: 25.6% (10/39)
+  Receiving: 51.3% (20/39)
+  Receiving: 100.0% (39/39)
+
+✓ File received successfully!
+  From: alice
+  Saved as: alice_report.pdf
+  Location: ~/.secure_messenger_client/files/received/alice_report.pdf
+  Size: 2.45 MB
+```
+
+**Behavior:**
+- Without a number: lists all pending file offers
+- With a number: accepts the specified offer
+- Receives file in encrypted chunks
+- Saves to `~/.secure_messenger_client/files/received/`
+- Filename is prefixed with sender's username
+- Handles duplicate filenames by appending a counter
+
+**Error cases:**
+
+<CodeGroup>
+```bash No pending offers
+> /acceptfile
+⚠ No pending file offers.
+```
+
+```bash Invalid selection
+> /acceptfile 5
+✗ Invalid selection
+```
+</CodeGroup>
+
+### /rejectfile
+
+Reject a pending file transfer.
+
+**Syntax:**
+```
+/rejectfile [number]
+```
+
+**Example:**
+
+**List pending offers:**
+```
+> /rejectfile
+
+Pending file offers:
+  1. report.pdf (2.45 MB) from alice
+  2. image.png (0.87 MB) from bob
+
+Usage: /rejectfile <number>
+```
+
+**Reject specific file:**
+```
+> /rejectfile 2
+✗ Rejected file: image.png
+```
+
+**Behavior:**
+- Without a number: lists all pending file offers
+- With a number: rejects the specified offer
+- Sender is notified of the rejection
+- File offer is removed from pending list
+
+## History and information
+
+### /history
+
+View recent message history.
+
+**Syntax:**
+```
+/history [count]
+```
+
+**Examples:**
+
+**Default (20 messages):**
+```
+> /history
+
+Message History (last 20 messages):
+────────────────────────────────────────────────────────
+[14:20] [bob] Hello
+[14:21] [You] Hi bob!
+[14:22] [charlie] Hey everyone
+[14:23] [You] Welcome charlie
+[14:24] [alice] Good afternoon
+────────────────────────────────────────────────────────
+```
+
+**Specific count:**
+```
+> /history 50
+
+Message History (last 50 messages):
+────────────────────────────────────────────────────────
+...
+```
+
+**Parameters:**
+- `[count]`: Number of messages to display (optional)
+  - Default: 20
+  - Maximum: 100
+  - Buffer size: 100 (older messages are discarded)
+
+**Behavior:**
+- Shows messages in chronological order
+- Includes all message types (incoming, outgoing, system)
+- Preserves formatting and timestamps
+- Messages are stored only in memory (cleared on exit)
+
+**Error cases:**
+
+<CodeGroup>
+```bash No history
+> /history
+No message history available.
+```
+
+```bash Invalid number
+> /history abc
+Invalid number. Usage: /history [count]
+```
+</CodeGroup>
+
+### /users
+
+List all currently online users.
+
+**Syntax:**
+```
+/users
+```
+
+**Example:**
+
+**Broadcast mode:**
+```
+> /users
+
+Online users:
+  1. alice
+  2. bob
+  3. charlie
+```
+
+**In a private room:**
+```
+to @bob > /users
+
+Online users:
+  1. alice
+  2. bob (in room)
+  3. charlie
+```
+
+**Behavior:**
+- Lists all connected users except yourself
+- Highlights your current room partner (if in a room)
+- Users are numbered for reference
+- Updates in real-time as users join/leave
+
+**Error case:**
+```bash No users online
+> /users
+No other users online.
+```
+
+### /help
+
+Display detailed command help.
+
+**Syntax:**
+```
+/help
+```
+
+**Example:**
+```
+> /help
+
+Available Commands:
+────────────────────────────────────────────────────────
+  /room <user>
+    Enter private room with <user>. All messages will be
+    sent only to that user until you /leave.
+
+  /leave
+    Leave current private room and return to broadcast mode.
+
+  /msg <user> <message>
+    Send a single private message without entering a room.
+
+  /sendfile <user> <filepath>
+    Send a file to <user>. Files are encrypted end-to-end.
+    Example: /sendfile alice ~/Documents/report.pdf
+
+  ...
+```
+
+**Behavior:**
+- Shows all available commands
+- Includes detailed descriptions and usage examples
+- Commands are color-coded based on current mode
+- Does not interrupt current conversation
+
+## Interface
+
+### /clear
+
+Clear the screen and refresh the interface.
+
+**Syntax:**
+```
+/clear
+```
+
+**Behavior:**
+- Clears the terminal screen
+- Redisplays the chat interface header
+- Shows command list
+- Preserves message history (use `/history` to view)
+- Useful for cleaning up clutter or preventing shoulder surfing
+
+### /exit
+
+Exit the pyMessenger client.
+
+**Syntax:**
+```
+/exit
+```
+
+**Aliases:**
+- `quit`
+- `exit`
+- `break`
+- `disconnect`
+- `Ctrl+C`
+
+**Example:**
+```
+> /exit
+
+╔═════════════╗
+║ Goodbye! 👋 ║
+╚═════════════╝
+
+Connection closed
+Ciao ! :)
+```
+
+**Behavior:**
+- Gracefully closes the connection to the server
+- Saves no state or history
+- Exits the application
+
+## Command tips
+
+<Note>
+  Commands are case-insensitive. `/EXIT`, `/exit`, and `/Exit` all work.
+</Note>
+
+<Note>
+  Unknown commands display a helpful error:
+  ```
+  > /unknown
+  Unknown command. Type /help for available commands.
+  ```
+</Note>
+
+<Warning>
+  Some commands require specific syntax. Missing parameters will cause errors:
+  ```
+  > /room
+  Unknown command. Type /help for available commands.
+  ```
+  
+  Always include required parameters (e.g., `/room alice`, not just `/room`).
+</Warning>

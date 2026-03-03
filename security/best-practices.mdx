@@ -1,0 +1,362 @@
+---
+title: Security best practices
+description: Recommendations for deploying and using pyMessenger securely
+---
+
+## Password guidelines
+
+Your password protects your private key and authenticates you to the server. Follow these guidelines to keep your account secure.
+
+### Choose a strong password
+
+<Steps>
+  <Step title="Minimum length">
+    Use at least 12 characters. pyMessenger enforces a minimum of 6 characters, but longer passwords are significantly more secure.
+  </Step>
+  
+  <Step title="Mix character types">
+    Combine uppercase and lowercase letters, numbers, and symbols to increase entropy.
+    
+    **Good**: `M3ss@ge!Secure#2026`
+    
+    **Bad**: `password123`
+  </Step>
+  
+  <Step title="Avoid common patterns">
+    Don't use:
+    - Dictionary words
+    - Personal information (names, birthdates)
+    - Sequential characters (`abc123`, `qwerty`)
+    - Common substitutions (`p@ssw0rd`)
+  </Step>
+  
+  <Step title="Use unique passwords">
+    Never reuse passwords from other services. If that service is compromised, your pyMessenger account remains secure.
+  </Step>
+</Steps>
+
+<Info>
+Consider using a password manager to generate and store strong, unique passwords. This is more secure than trying to remember complex passwords.
+</Info>
+
+### Password hashing details
+
+pyMessenger uses PBKDF2-SHA256 to protect your password:
+
+- **Algorithm**: PBKDF2 with SHA-256 hash function
+- **Iterations**: 100,000 (increases computation time for attackers)
+- **Salt**: 256-bit random salt per password (prevents rainbow table attacks)
+- **Output**: 256-bit key
+
+Even with this strong hashing, a weak password can still be cracked. The 100,000 iterations slow down attackers but don't eliminate the threat entirely.
+
+## Account security
+
+### Monitor failed login attempts
+
+Review the security log regularly to detect unauthorized access attempts:
+
+```bash
+tail -f ~/.secure_messenger/logs/security.log
+```
+
+<Warning>
+If you see repeated failed login attempts for your account that you didn't make, someone may be trying to guess your password. Consider changing your password immediately.
+</Warning>
+
+### Understand account lockout
+
+After 5 failed login attempts within 5 minutes, your account locks for 15 minutes:
+
+- **Automatic unlock**: The lockout expires after 15 minutes
+- **No manual unlock**: You cannot unlock an account early
+- **Attempts reset**: After successful login, failed attempt counters are cleared
+
+<Accordion title="What if I forget my password during lockout?">
+You'll need to wait for the 15-minute lockout period to expire before trying again. There is no password reset mechanism in pyMessenger - if you lose your password, you'll need to create a new account.
+</Accordion>
+
+## Private key protection
+
+Your RSA private key is the most sensitive piece of data in pyMessenger. Protect it carefully.
+
+### Key file location
+
+Your encrypted private key is stored at:
+
+**Linux/macOS**: `~/.secure_messenger_client/keys/{username}_private.key`
+
+**Windows**: `C:\Users\[YOUR_USER]\.secure_messenger_client\keys\{username}_private.key`
+
+### Backup considerations
+
+<Warning>
+If you lose your private key file, you cannot decrypt any messages sent to you. There is no recovery mechanism.
+</Warning>
+
+**Backup recommendations**:
+
+1. **Create encrypted backups**: Store your key file in an encrypted backup (encrypted disk, password manager vault)
+2. **Secure backup location**: Never store backups in unencrypted cloud storage
+3. **Test restoration**: Periodically verify you can restore from backup
+4. **Multiple devices**: If using multiple devices, copy your key file securely between them - don't generate new keys
+
+### File permissions
+
+On Unix systems, pyMessenger sets restrictive permissions automatically:
+
+```bash
+# Key files are readable/writable only by you
+chmod 600 ~/.secure_messenger_client/keys/*_private.key
+
+# Key directory is accessible only by you
+chmod 700 ~/.secure_messenger_client/keys
+```
+
+On Windows, manually restrict access using file properties to ensure only your user account can read the key file.
+
+## TLS/SSL configuration
+
+### Generate strong certificates
+
+The default certificate generation uses secure parameters:
+
+```bash
+python3 generate_certificates.py
+```
+
+This creates:
+- **Key size**: 2048-bit RSA
+- **Signature algorithm**: SHA-256
+- **Validity period**: 365 days
+- **Subject Alternative Names**: localhost, 127.0.0.1
+
+<Note>
+Certificates expire after 365 days. Regenerate them before expiration to avoid service interruption.
+</Note>
+
+### Use trusted certificates in production
+
+The self-signed certificates are suitable for testing but vulnerable to man-in-the-middle attacks in production.
+
+<Warning>
+Self-signed certificates cannot be verified by clients automatically. An attacker who intercepts your connection can substitute their own certificate without detection.
+</Warning>
+
+**For production deployment**:
+
+1. **Obtain a certificate from a trusted CA**: Use Let's Encrypt (free) or a commercial certificate authority
+2. **Configure the server**: Replace `~/.secure_messenger/certs/server.crt` and `server.key` with your CA-signed certificate
+3. **Update clients**: Remove the `--insecure` flag if you were using it for self-signed certificates
+
+### Certificate file permissions
+
+Protect your server private key:
+
+```bash
+# Private key should be readable only by server process owner
+chmod 600 ~/.secure_messenger/certs/server.key
+
+# Certificate can be world-readable
+chmod 644 ~/.secure_messenger/certs/server.crt
+```
+
+<Info>
+On Unix systems, these permissions are set automatically by `generate_certificates.py`. On Windows, manually restrict access using file properties.
+</Info>
+
+## Server deployment
+
+### Secure the user database
+
+The user database at `~/.secure_messenger/users.json` contains:
+
+- Hashed passwords (PBKDF2-SHA256)
+- Public keys
+- Account metadata (creation time, last login)
+
+While passwords are hashed, you should still protect this file:
+
+```bash
+# Restrict database file to server process owner
+chmod 600 ~/.secure_messenger/users.json
+
+# Restrict entire config directory
+chmod 700 ~/.secure_messenger
+```
+
+### Enable security logging
+
+Security logs are automatically written to `~/.secure_messenger/logs/security.log`. Monitor this file for:
+
+- Repeated failed login attempts
+- Account lockouts
+- Unusual login patterns (logins from unexpected IP addresses)
+- Challenge verification errors
+
+**Set up log monitoring**:
+
+```bash
+# Watch logs in real-time
+tail -f ~/.secure_messenger/logs/security.log
+
+# Search for failed logins
+grep "Authentication failed" ~/.secure_messenger/logs/security.log
+
+# Find account lockouts
+grep "Account locked" ~/.secure_messenger/logs/security.log
+```
+
+<Accordion title="Log rotation">
+Security logs grow over time. Set up log rotation to prevent disk space issues:
+
+```bash
+# Example logrotate configuration
+# /etc/logrotate.d/pymessenger
+
+/home/username/.secure_messenger/logs/security.log {
+    weekly
+    rotate 12
+    compress
+    delaycompress
+    missingok
+    notifempty
+}
+```
+</Accordion>
+
+### Network security
+
+<Steps>
+  <Step title="Use a firewall">
+    Restrict access to the server port (default: 1315) to trusted networks:
+    
+    ```bash
+    # Example using ufw (Ubuntu)
+    sudo ufw allow from 192.168.1.0/24 to any port 1315
+    ```
+  </Step>
+  
+  <Step title="Deploy behind a reverse proxy">
+    Use nginx or Apache to add:
+    - Rate limiting (prevent DoS attacks)
+    - Access logging
+    - IP filtering
+    - DDoS protection
+  </Step>
+  
+  <Step title="Enable TLS">
+    Always run with TLS enabled in production:
+    
+    ```bash
+    python3 server.py --host 0.0.0.0 --port 1315
+    ```
+    
+    Make sure certificates are valid and not expired.
+  </Step>
+</Steps>
+
+## Client security
+
+### Verify server certificates
+
+When connecting to a server, verify the certificate fingerprint on first connection:
+
+```bash
+# Get server certificate fingerprint
+openssl s_client -connect server:1315 < /dev/null 2>/dev/null | \
+  openssl x509 -fingerprint -noout
+```
+
+Compare this fingerprint with the value provided by your server administrator through a trusted channel.
+
+<Warning>
+Do not accept unknown certificates from untrusted servers. An attacker performing a man-in-the-middle attack will present a different certificate.
+</Warning>
+
+### Secure your endpoint
+
+End-to-end encryption only works if both endpoints are secure:
+
+1. **Full disk encryption**: Encrypt your entire disk (FileVault, BitLocker, LUKS)
+2. **Screen lock**: Set up automatic screen lock when idle
+3. **Operating system updates**: Keep your OS and Python packages updated
+4. **Antivirus/antimalware**: Use security software to detect keyloggers and malware
+5. **Physical security**: Don't leave your device unattended while logged in
+
+### Clear sensitive data on logout
+
+pyMessenger keeps your private key in memory while logged in. Always exit cleanly:
+
+```bash
+# Use the exit command
+/exit
+```
+
+This ensures:
+- Your private key is cleared from memory
+- Your session is properly terminated on the server
+- Temporary data is cleaned up
+
+<Note>
+Simply closing the terminal window may leave your session active on the server. Use the `/exit` command for clean logout.
+</Note>
+
+## Message security
+
+### Understand broadcast vs private messages
+
+- **Broadcast messages**: Encrypted for all online users. Anyone online when you send can decrypt the message.
+- **Private room messages**: Encrypted only for you and the other participant
+- **Direct messages** (`/msg`): Encrypted only for the specified recipient
+
+<Info>
+The server can always see message metadata (sender, recipients, timestamp, message size) even though it cannot decrypt content. For maximum privacy, use private rooms instead of broadcast.
+</Info>
+
+### File transfer safety
+
+When receiving files:
+
+1. **Verify sender identity**: Make sure you trust the sender before accepting files
+2. **Scan received files**: Use antivirus software to scan files before opening
+3. **Check file extensions**: Be cautious with executable files (.exe, .bat, .sh)
+4. **Review file location**: Files are saved to `~/.secure_messenger_client/files/received/`
+
+Files are encrypted during transfer, but pyMessenger does not scan for malware.
+
+<Warning>
+Accepting a file from an untrusted sender could compromise your system if the file contains malware. Always verify sender identity and scan files before opening.
+</Warning>
+
+## Rate limiting bypass attempts
+
+Do not attempt to bypass rate limiting or account lockout mechanisms:
+
+- Changing IP addresses to circumvent rate limits may trigger additional security measures
+- Repeated lockouts from the same account indicate either password issues or attack attempts
+- If you've forgotten your password, create a new account instead of repeatedly guessing
+
+<Note>
+There is no password reset mechanism in pyMessenger. If you forget your password, you must create a new account and generate new keys.
+</Note>
+
+## Security updates
+
+Keep pyMessenger and its dependencies updated:
+
+```bash
+# Update Python packages
+pip install --upgrade -r requirements.txt
+
+# Check for pyMessenger updates
+cd /path/to/pyMessenger
+git pull origin main
+```
+
+Critical security dependencies:
+- **pycryptodome**: Cryptographic operations (RSA, AES, PBKDF2)
+- **cryptography**: SSL/TLS certificate handling
+- **Python**: The Python interpreter itself
+
+Subscribe to security advisories for these packages and update promptly when vulnerabilities are disclosed.

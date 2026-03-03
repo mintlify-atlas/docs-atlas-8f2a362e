@@ -1,0 +1,151 @@
+---
+title: Introduction to pyMessenger
+description: A secure, terminal-based messaging application implementing modern cryptographic protocols for private communication
+---
+
+<img
+  className="block"
+  src="/images/hero-light.svg"
+  alt="pyMessenger Hero Light"
+/>
+
+## End-to-end encrypted messaging from your terminal
+
+pyMessenger is a client-server messaging system that provides end-to-end encryption, secure authentication, and both broadcast and private messaging capabilities. The system uses a hybrid encryption approach combining RSA and AES encryption, with SSL/TLS transport layer security.
+
+<CardGroup cols={2}>
+  <Card
+    title="End-to-end encryption"
+    icon="lock"
+    iconType="duotone"
+  >
+    Messages are encrypted with AES-256-EAX and RSA-2048-OAEP. The server never sees plaintext content.
+  </Card>
+  <Card
+    title="Challenge-response authentication"
+    icon="shield-check"
+    iconType="duotone"
+  >
+    Secure HMAC-based authentication protocol that never transmits passwords over the network after registration.
+  </Card>
+  <Card
+    title="Private rooms and messaging"
+    icon="messages"
+    iconType="duotone"
+  >
+    Create private chat rooms or send direct messages with the same end-to-end encryption guarantees.
+  </Card>
+  <Card
+    title="Encrypted file sharing"
+    icon="file-arrow-up"
+    iconType="duotone"
+  >
+    Share files securely with chunk-based encryption. Files are never stored on the server.
+  </Card>
+</CardGroup>
+
+## Security architecture
+
+pyMessenger implements a defense-in-depth security model with multiple encryption layers:
+
+### Application layer: End-to-end encryption
+
+- **RSA-2048** for AES key exchange
+- **AES-256-EAX** for message content encryption
+- **Per-message unique keys** for forward secrecy
+- **AEAD mode** provides authentication and prevents tampering
+
+### Transport layer: TLS/SSL
+
+- **TLS 1.2+** with strong cipher suites
+- **Certificate-based** server verification
+- Protects metadata and prevents man-in-the-middle attacks
+
+### Key management
+
+Client-side RSA keypairs are generated locally and encrypted with password-based key derivation:
+
+- **PBKDF2-SHA256** with 100,000 iterations
+- **AES-256-GCM** for private key encryption
+- **Random salt** (128-bit) per key
+- Stored in `~/.secure_messenger_client/keys/`
+
+<Note>
+  The server never has access to private keys. It only stores hashed passwords and public keys.
+</Note>
+
+## Authentication system
+
+pyMessenger uses a secure challenge-response protocol that avoids transmitting passwords over the network after initial registration:
+
+<Steps>
+  <Step title="Client sends login request">
+    The client sends username and public key to initiate authentication.
+  </Step>
+  <Step title="Server generates challenge">
+    Server generates a random nonce and sends it with the user's salt.
+  </Step>
+  <Step title="Client computes response">
+    Client derives password key from password and salt, then computes `HMAC-SHA256(key=password_key, msg=nonce)`.
+  </Step>
+  <Step title="Server validates and issues token">
+    Server verifies the HMAC signature and issues a session token if valid.
+  </Step>
+</Steps>
+
+<Warning>
+  After 5 failed authentication attempts, accounts are locked out for 15 minutes to prevent brute force attacks.
+</Warning>
+
+## Message encryption flow
+
+Messages use a hybrid encryption scheme for optimal performance:
+
+<Steps>
+  <Step title="Generate symmetric key">
+    A random AES-256 key is generated using a cryptographically secure random number generator.
+  </Step>
+  <Step title="Encrypt message content">
+    The plaintext is encrypted with AES-256-EAX mode, producing ciphertext, nonce, and authentication tag.
+  </Step>
+  <Step title="Encrypt AES key for each recipient">
+    The AES key is separately encrypted with each recipient's RSA-2048 public key using OAEP padding.
+  </Step>
+  <Step title="Deliver message envelope">
+    The server routes the encrypted message envelope to recipients, who decrypt the AES key with their private key, then decrypt the message.
+  </Step>
+</Steps>
+
+## Feature highlights
+
+### Messaging modes
+
+- **Broadcast mode**: Messages sent to all online users (default)
+- **Private rooms**: Enter exclusive chat rooms with specific users
+- **Direct messages**: Send one-off private messages without entering a room
+
+### Mention system
+
+Mention users in messages with `@username` syntax. Mentions are highlighted for both sender and recipient.
+
+### File sharing
+
+- End-to-end encrypted file transfers
+- Chunk-based transfer (64KB chunks)
+- Per-chunk encryption with unique AES-256 keys
+- Accept/reject system for incoming files
+- Files saved to `~/.secure_messenger_client/files/received/`
+
+### Security features
+
+| Feature | Implementation |
+|---------|----------------|
+| Password storage | PBKDF2-SHA256 with 100,000 iterations |
+| Challenge timeout | 5 minutes |
+| Rate limiting | 5 attempts per 15-minute window |
+| Message encryption | AES-256-EAX with RSA-2048-OAEP |
+| Perfect forward secrecy | Ephemeral key exchange (ECDHE/DHE) |
+
+## Get started
+
+Ready to start using pyMessenger? Follow our [quickstart guide](/quickstart) to set up your first secure messaging session in minutes.

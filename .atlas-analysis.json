@@ -1,0 +1,81 @@
+{
+  "projectType": "general",
+  "projectName": "pyMessenger",
+  "projectDescription": "A secure, terminal-based messaging application implementing modern cryptographic protocols for private communication.",
+  "theme": "aspen",
+  "primaryColor": "#2563eb",
+  "lightColor": "#3b82f6",
+  "darkColor": "#1e40af",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/security-architecture",
+              "concepts/cryptographic-layers",
+              "concepts/authentication",
+              "concepts/encryption"
+            ]
+          },
+          {
+            "group": "Usage Guide",
+            "pages": [
+              "guide/running-server",
+              "guide/running-client",
+              "guide/messaging",
+              "guide/commands",
+              "guide/file-sharing"
+            ]
+          },
+          {
+            "group": "Security",
+            "pages": [
+              "security/threat-model",
+              "security/best-practices",
+              "security/certificates"
+            ]
+          },
+          {
+            "group": "Reference",
+            "pages": [
+              "reference/protocol",
+              "reference/configuration",
+              "reference/troubleshooting"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "End-to-end encryption with RSA-2048 and AES-256-EAX",
+    "Challenge-response authentication using HMAC-SHA256",
+    "TLS/SSL transport layer security",
+    "Encrypted file sharing with chunked transfers",
+    "Broadcast and private messaging modes",
+    "Password-based key derivation with PBKDF2"
+  ],
+  "publicApiSurface": [
+    "server.py - Message broker and authentication server",
+    "client.py - Terminal-based messaging client",
+    "user_store.py - User authentication and database management",
+    "generate_certificates.py - SSL certificate generation utility",
+    "/room <user> - Enter private chat room",
+    "/msg <user> <text> - Send private message",
+    "/sendfile <user> <path> - Send encrypted file",
+    "/acceptfile - Accept file transfer",
+    "/users - List online users",
+    "/history - View message history"
+  ]
+}
